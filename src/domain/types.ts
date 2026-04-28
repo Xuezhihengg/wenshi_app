@@ -66,6 +66,7 @@ export type LunarInfo = {
   dayStemBranch: string;
   monthStemBranch: string;
   yearStemBranch: string;
+  timeStemBranch: string;
   dayXun: string;
   voidBranches: string[];
   prevSolarTerm: string;

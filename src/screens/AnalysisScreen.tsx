@@ -1,13 +1,17 @@
 import { LinearGradient } from 'expo-linear-gradient';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Animated, Easing, Modal, PanResponder, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View, useWindowDimensions, type GestureResponderEvent } from 'react-native';
+import { Animated, Easing, Keyboard, LayoutAnimation, Modal, PanResponder, Pressable, ScrollView, Share, StyleSheet, Text, TextInput, UIManager, View, useWindowDimensions, type GestureResponderEvent } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { hexagramTextFor, type HexagramTextSection } from '../domain/hexagramTexts';
 import { HexagramLine, SpiritAnalysis, YinYang } from '../domain/types';
 import { RootStackParamList } from '../navigation/types';
+import { saveRecord } from '../storage/recordStore';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Analysis'>;
 type MetaMode = 'sixKin' | 'sixSpirit';
+type SpiritRippleItem = { id: number; lineIndex: number; isHidden: boolean; progress: Animated.Value };
+type VerificationNote = { id: number; fulfilled: boolean; note: string; createdAt: string };
 const META_COLUMN_WIDTH = 54;
 
 const ELEMENT_COLORS: Record<string, string> = {
@@ -49,6 +53,16 @@ const TEXT_SECTION_LABELS: Record<HexagramTextSection, string> = {
 
 const TEXT_SECTIONS: HexagramTextSection[] = ['judgment', 'tuan', 'image', 'lines'];
 
+function formatCompactChineseDateTime(value: string | Date) {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日 ${date.getHours()}时`;
+}
+
+function formatStemBranchDateTime(lunarInfo: Props['route']['params']['record']['lunarInfo']) {
+  return `${lunarInfo.yearStemBranch}年 ${lunarInfo.monthStemBranch}月 ${lunarInfo.dayStemBranch}日${lunarInfo.timeStemBranch ? ` ${lunarInfo.timeStemBranch}时` : ''}`;
+}
+
 const STATUS_COLORS: Record<string, { background: string; text: string }> = {
   旺: { background: '#d63f31', text: '#fff' },
   相: { background: '#e39b24', text: '#fff' },
@@ -60,6 +74,7 @@ const STATUS_COLORS: Record<string, { background: string; text: string }> = {
 const META_SWITCH_DISTANCE = 14;
 const COLLAPSIBLE_TOP_HEIGHT = 302;
 const COLLAPSE_DISTANCE = 256;
+const ESTIMATED_RESULT_NOTE_CARD_HEIGHT = 212;
 const INTRO_HEX_COLUMN_WIDTH = 132;
 const INTRO_YIN_GAP = 16;
 type LayoutRect = { x: number; y: number; width: number; height: number };
@@ -110,6 +125,11 @@ function spiritAnalysisColor(analysis: SpiritAnalysis | undefined, fallback: str
 function spiritAnalysisBackground(analysis: SpiritAnalysis | undefined) {
   if (!analysis?.color) return '#f2f2f2';
   return ELEMENT_LIGHT_COLORS[analysis.color] ?? '#f2f2f2';
+}
+
+function spiritLineColor(lineIndex: number, isHidden: boolean, spiritAnalyses: SpiritAnalysis[]) {
+  const analysis = spiritAnalyses.find((item) => item.lineIndex === lineIndex && Boolean(item.isHidden) === isHidden && item.color);
+  return analysis?.color ? ELEMENT_COLORS[analysis.color] : undefined;
 }
 
 function spiritShortLabel(title: SpiritAnalysis['title']) {
@@ -281,8 +301,8 @@ function HexagramMarkTags({ marks }: { marks?: string[] }) {
 
 function AnalysisPageTabs({ scrollX, pageWidth }: { scrollX: Animated.Value; pageWidth: number }) {
   const pillTranslateX = scrollX.interpolate({
-    inputRange: [0, pageWidth * 0.22, pageWidth * 0.78, pageWidth],
-    outputRange: [0, 8, 48, 56],
+    inputRange: [0, pageWidth * 0.5, pageWidth, pageWidth * 1.5, pageWidth * 2],
+    outputRange: [0, 28, 56, 84, 112],
     extrapolate: 'clamp',
   });
   const firstTitleOpacity = scrollX.interpolate({
@@ -296,13 +316,23 @@ function AnalysisPageTabs({ scrollX, pageWidth }: { scrollX: Animated.Value; pag
     extrapolate: 'clamp',
   });
   const secondDotOpacity = scrollX.interpolate({
-    inputRange: [0, pageWidth * 0.55, pageWidth],
-    outputRange: [1, 1, 0],
+    inputRange: [0, pageWidth * 0.55, pageWidth, pageWidth * 1.45, pageWidth * 2],
+    outputRange: [1, 1, 0, 1, 1],
     extrapolate: 'clamp',
   });
   const secondTitleOpacity = scrollX.interpolate({
-    inputRange: [0, pageWidth * 0.55, pageWidth],
-    outputRange: [0, 0, 1],
+    inputRange: [0, pageWidth * 0.55, pageWidth, pageWidth * 1.45, pageWidth * 2],
+    outputRange: [0, 0, 1, 0, 0],
+    extrapolate: 'clamp',
+  });
+  const thirdDotOpacity = scrollX.interpolate({
+    inputRange: [0, pageWidth, pageWidth * 1.55, pageWidth * 2],
+    outputRange: [1, 1, 1, 0],
+    extrapolate: 'clamp',
+  });
+  const thirdTitleOpacity = scrollX.interpolate({
+    inputRange: [0, pageWidth, pageWidth * 1.55, pageWidth * 2],
+    outputRange: [0, 0, 0, 1],
     extrapolate: 'clamp',
   });
 
@@ -317,6 +347,10 @@ function AnalysisPageTabs({ scrollX, pageWidth }: { scrollX: Animated.Value; pag
         <View style={styles.analysisTabSlot}>
           <Animated.View style={[styles.analysisTabDot, { opacity: secondDotOpacity }]} />
           <Animated.Text style={[styles.analysisTabText, { opacity: secondTitleOpacity }]}>合局</Animated.Text>
+        </View>
+        <View style={styles.analysisTabSlot}>
+          <Animated.View style={[styles.analysisTabDot, { opacity: thirdDotOpacity }]} />
+          <Animated.Text style={[styles.analysisTabText, { opacity: thirdTitleOpacity }]}>验事</Animated.Text>
         </View>
       </View>
     </View>
@@ -393,26 +427,231 @@ function SpiritAnalysisBlock({
   const color = spiritAnalysisColor(analysis, fallbackColor);
   return (
     <Pressable style={[styles.spiritAnalysisCard, { backgroundColor: spiritAnalysisBackground(analysis) }]} onPress={() => onCardPress(analysis)}>
-      <Pressable
-        style={styles.useGodRow}
-        onPress={(event) => {
-          event.stopPropagation();
-          onTitlePress(analysis, event);
-        }}
-      >
-        <View style={styles.spiritTitleLeft}>
-          <Text style={styles.summaryTitle}>{analysis.title}</Text>
-          <Text style={[styles.useGodValue, { color }]}>{analysis.displayName}</Text>
-        </View>
+      <View style={styles.useGodRow}>
+        <Pressable
+          style={styles.spiritTitleLeft}
+          onPress={(event) => {
+            event.stopPropagation();
+            onTitlePress(analysis, event);
+          }}
+          hitSlop={6}
+        >
+            <Text style={styles.summaryTitle}>{analysis.title}</Text>
+            <Text style={[styles.useGodValue, { color }]}>{analysis.displayName}</Text>
+        </Pressable>
         {analysis.positionName ? <Text style={styles.spiritPositionText}>{analysis.positionName}</Text> : null}
-      </Pressable>
+      </View>
       <Text style={styles.summaryText}>{analysis.detail}</Text>
     </Pressable>
   );
 }
 
-function SpiritRipple({ active, progress }: { active: boolean; progress: Animated.Value }) {
-  if (!active) return null;
+function ResultInfoRow({ label, value }: { label: string; value: string }) {
+  return (
+    <View style={styles.resultInfoRow}>
+      <Text style={styles.resultInfoLabel}>{label}</Text>
+      <Text style={styles.resultInfoValue}>{value}</Text>
+    </View>
+  );
+}
+
+function VerificationNoteCard({
+  note,
+  deleteArmed,
+  onArmDelete,
+  onUpdate,
+  onDelete,
+  onFocus,
+  keyboardLift,
+  onMeasured,
+}: {
+  note: VerificationNote;
+  deleteArmed: boolean;
+  onArmDelete: (id: number) => void;
+  onUpdate: (id: number, patch: Partial<VerificationNote>) => void;
+  onDelete: (id: number) => void;
+  onFocus: () => void;
+  keyboardLift: Animated.Value;
+  onMeasured?: (height: number) => void;
+}) {
+  const mountProgress = useRef(new Animated.Value(0)).current;
+  const switchProgress = useRef(new Animated.Value(note.fulfilled ? 1 : 0)).current;
+  const deleteProgress = useRef(new Animated.Value(deleteArmed ? 1 : 0)).current;
+  const [switchWidth, setSwitchWidth] = useState(0);
+  const indicatorWidth = Math.max(0, (switchWidth - 6) / 2);
+  const indicatorTranslateX = switchProgress.interpolate({
+    inputRange: [0, 1],
+    outputRange: [indicatorWidth, 0],
+  });
+  const fulfilledOpacity = switchProgress;
+  const unfulfilledOpacity = switchProgress.interpolate({ inputRange: [0, 1], outputRange: [1, 0] });
+  const deleteBackgroundScale = deleteProgress.interpolate({ inputRange: [0, 1], outputRange: [0.74, 1] });
+  const deleteBlackOpacity = deleteProgress.interpolate({ inputRange: [0, 1], outputRange: [1, 0] });
+  const deleteRedOpacity = deleteProgress;
+
+  useEffect(() => {
+    mountProgress.setValue(0);
+    Animated.timing(mountProgress, {
+      toValue: 1,
+      duration: 420,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    }).start();
+  }, [mountProgress]);
+
+  useEffect(() => {
+    Animated.timing(switchProgress, {
+      toValue: note.fulfilled ? 1 : 0,
+      duration: 260,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    }).start();
+  }, [note.fulfilled, switchProgress]);
+
+  useEffect(() => {
+    Animated.timing(deleteProgress, {
+      toValue: deleteArmed ? 1 : 0,
+      duration: deleteArmed ? 180 : 220,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    }).start();
+  }, [deleteArmed, deleteProgress]);
+
+  const opacity = mountProgress;
+  const handleDeletePress = (event: GestureResponderEvent) => {
+    event.stopPropagation();
+    if (!deleteArmed) {
+      onArmDelete(note.id);
+      return;
+    }
+    Animated.timing(mountProgress, {
+      toValue: 0,
+      duration: 260,
+      easing: Easing.inOut(Easing.cubic),
+      useNativeDriver: true,
+    }).start(({ finished }) => {
+      if (finished) onDelete(note.id);
+    });
+  };
+
+  return (
+    <Animated.View
+      onLayout={(event) => onMeasured?.(event.nativeEvent.layout.height)}
+      style={[styles.resultNoteCard, { opacity, transform: [{ translateY: keyboardLift }] }]}
+    >
+      <Animated.View pointerEvents="none" style={[styles.resultNoteBackground, styles.resultNoteUnfulfilledBackground, { opacity: unfulfilledOpacity }]} />
+      <Animated.View pointerEvents="none" style={[styles.resultNoteBackground, styles.resultNoteFulfilledBackground, { opacity: fulfilledOpacity }]} />
+      <View style={styles.resultNoteHeader}>
+        <View>
+          <Text style={styles.unionTitle}>批注</Text>
+          <Text style={styles.resultNoteTime}>{formatCompactChineseDateTime(note.createdAt)}</Text>
+        </View>
+        <Pressable style={styles.deleteIconButton} onPress={handleDeletePress}>
+          <Animated.View
+            pointerEvents="none"
+            style={[
+              styles.deleteIconBackground,
+              {
+                opacity: deleteProgress,
+                transform: [{ scale: deleteBackgroundScale }],
+              },
+            ]}
+          />
+          <Animated.Text pointerEvents="none" style={[styles.deleteIconText, { opacity: deleteBlackOpacity }]}>×</Animated.Text>
+          <Animated.Text pointerEvents="none" style={[styles.deleteIconText, styles.deleteIconTextArmed, styles.deleteIconOverlayText, { opacity: deleteRedOpacity }]}>×</Animated.Text>
+        </Pressable>
+      </View>
+      <View style={styles.fulfillmentSwitchRow} onLayout={(event) => setSwitchWidth(event.nativeEvent.layout.width)}>
+        <Animated.View
+          pointerEvents="none"
+          style={[
+            styles.fulfillmentSwitchIndicator,
+            {
+              width: indicatorWidth,
+              transform: [{ translateX: indicatorTranslateX }],
+            },
+          ]}
+        />
+        <Pressable
+          style={styles.fulfillmentSwitchOption}
+          onPress={(event) => {
+            event.stopPropagation();
+            onUpdate(note.id, { fulfilled: true });
+          }}
+        >
+          <Text style={[styles.fulfillmentSwitchText, note.fulfilled ? styles.fulfillmentActiveText : null]}>应验</Text>
+        </Pressable>
+        <Pressable
+          style={styles.fulfillmentSwitchOption}
+          onPress={(event) => {
+            event.stopPropagation();
+            onUpdate(note.id, { fulfilled: false });
+          }}
+        >
+          <Text style={[styles.fulfillmentSwitchText, !note.fulfilled ? styles.fulfillmentActiveText : null]}>未应验</Text>
+        </Pressable>
+      </View>
+      <Pressable style={styles.resultNoteInputWrap} onPress={(event) => event.stopPropagation()}>
+        <TextInput
+          value={note.note}
+          onChangeText={(text) => onUpdate(note.id, { note: text })}
+          onFocus={onFocus}
+          placeholder="写下应期、结果、细节与复盘。"
+          placeholderTextColor="#888"
+          multiline
+          textAlignVertical="top"
+          style={styles.resultNoteInput}
+        />
+      </Pressable>
+    </Animated.View>
+  );
+}
+
+function VerificationNoteMeasureCard({ onMeasured }: { onMeasured: (height: number) => void }) {
+  return (
+    <View
+      pointerEvents="none"
+      style={styles.resultNoteMeasureCard}
+      onLayout={(event) => {
+        const height = event.nativeEvent.layout.height;
+        if (height > 0) onMeasured(height);
+      }}
+    >
+      <View style={styles.resultNoteCard}>
+        <View style={styles.resultNoteHeader}>
+          <View>
+            <Text style={styles.unionTitle}>批注</Text>
+            <Text style={styles.resultNoteTime}>{formatCompactChineseDateTime(new Date())}</Text>
+          </View>
+          <View style={styles.deleteIconButton}>
+            <Text style={styles.deleteIconText}>×</Text>
+          </View>
+        </View>
+        <View style={styles.fulfillmentSwitchRow}>
+          <View style={styles.fulfillmentSwitchOption}>
+            <Text style={[styles.fulfillmentSwitchText, styles.fulfillmentActiveText]}>应验</Text>
+          </View>
+          <View style={styles.fulfillmentSwitchOption}>
+            <Text style={styles.fulfillmentSwitchText}>未应验</Text>
+          </View>
+        </View>
+        <View style={styles.resultNoteInputWrap}>
+          <TextInput
+            value=""
+            editable={false}
+            placeholder="写下应期、结果、细节与复盘。"
+            placeholderTextColor="#888"
+            multiline
+            textAlignVertical="top"
+            style={styles.resultNoteInput}
+          />
+        </View>
+      </View>
+    </View>
+  );
+}
+
+function SpiritRipple({ progress }: { progress: Animated.Value }) {
   const opacity = progress.interpolate({ inputRange: [0, 0.12, 0.62, 1], outputRange: [0, 1, 0.78, 0] });
   const scaleX = progress.interpolate({ inputRange: [0, 1], outputRange: [1, 1.22] });
   const scaleY = progress.interpolate({ inputRange: [0, 1], outputRange: [0.5, 1.5] });
@@ -526,9 +765,7 @@ function HexPairRow({
   useGodColor,
   finalYinGap,
   spiritAnalyses,
-  rippleLineIndex,
-  rippleIsHidden,
-  rippleProgress,
+  ripples,
 }: {
   baseLine: HexagramLine;
   changedLine: HexagramLine;
@@ -556,9 +793,7 @@ function HexPairRow({
   useGodColor: string;
   finalYinGap: number;
   spiritAnalyses: SpiritAnalysis[];
-  rippleLineIndex?: number;
-  rippleIsHidden: boolean;
-  rippleProgress: Animated.Value;
+  ripples: SpiritRippleItem[];
 }) {
   const meta = metaTextForMode(baseLine, mode);
   const changedMeta = metaTextForMode(changedLine, mode);
@@ -571,14 +806,12 @@ function HexPairRow({
   const canShowHiddenSpirit = hasEffectiveHiddenSpirit(baseLine);
   const hiddenSpirit = baseLine.hiddenSpirit;
   const hiddenMeta = hiddenSpiritMetaForMode(baseLine, mode);
-  const isUseGodLine = useGodLineIndexes.includes(baseLine.index);
-  const isHiddenUseGodLine = useGodHiddenLineIndexes.includes(baseLine.index);
-  const hiddenUseGodColor = hiddenSpirit ? ELEMENT_COLORS[hiddenSpirit.branchElement] ?? useGodColor : useGodColor;
+  const spiritColor = spiritLineColor(baseLine.index, false, spiritAnalyses);
+  const hiddenSpiritColor = spiritLineColor(baseLine.index, true, spiritAnalyses);
   const roleColumnLabels = roleLabels(baseLine, spiritAnalyses);
-  const isRippleActive = rippleLineIndex === baseLine.index;
-  const showBaseRipple = isRippleActive && !rippleIsHidden;
-  const showHiddenRipple = isRippleActive && rippleIsHidden;
-  const rowStyle = [styles.hexLineRow, (isRippleActive || isHiddenSpiritActive) ? styles.hexLineRowActive : null];
+  const baseRipples = ripples.filter((ripple) => ripple.lineIndex === baseLine.index && !ripple.isHidden);
+  const hiddenRipples = ripples.filter((ripple) => ripple.lineIndex === baseLine.index && ripple.isHidden);
+  const rowStyle = [styles.hexLineRow, (baseRipples.length > 0 || hiddenRipples.length > 0 || isHiddenSpiritActive) ? styles.hexLineRowActive : null];
   const content = (
     <View style={rowStyle}>
       {hasChanged ? (
@@ -611,9 +844,9 @@ function HexPairRow({
         >
           <View ref={baseMotionLineRef} collapsable={false} style={styles.hexMotionMeasure}>
             <View pointerEvents="none" style={styles.rippleAnchor}>
-              <SpiritRipple active={showBaseRipple} progress={rippleProgress} />
+              {baseRipples.map((ripple) => <SpiritRipple key={ripple.id} progress={ripple.progress} />)}
             </View>
-            <HexLine line={baseLine} muted={canShowHiddenSpirit} highlightColor={isUseGodLine ? useGodColor : undefined} yinGap={finalYinGap} />
+            <HexLine line={baseLine} muted={canShowHiddenSpirit} highlightColor={spiritColor} yinGap={finalYinGap} />
           </View>
         </Pressable>
         <Animated.View style={[styles.statusColumn, { width: statusColumnWidth }]}>
@@ -641,10 +874,10 @@ function HexPairRow({
             <View style={styles.hexColumn}>
               <Animated.View style={styles.hiddenSpiritLineContent}>
                 <View pointerEvents="none" style={styles.rippleAnchor}>
-                  <SpiritRipple active={showHiddenRipple} progress={rippleProgress} />
+                  {hiddenRipples.map((ripple) => <SpiritRipple key={ripple.id} progress={ripple.progress} />)}
                 </View>
                 <Animated.View style={{ opacity: hiddenOverlayOpacity }}>
-                  <RawHexLine yinYang={hiddenSpirit.yinYang} muted={!isHiddenUseGodLine} highlightColor={isHiddenUseGodLine ? hiddenUseGodColor : undefined} yinGap={finalYinGap} />
+                  <RawHexLine yinYang={hiddenSpirit.yinYang} muted={!hiddenSpiritColor} highlightColor={hiddenSpiritColor} yinGap={finalYinGap} />
                 </Animated.View>
               </Animated.View>
             </View>
@@ -682,10 +915,10 @@ function HexPairRow({
               <View style={[styles.hexColumn, styles.hiddenSpiritForeground]}>
                 <Animated.View style={styles.hiddenSpiritLineContent}>
                   <View pointerEvents="none" style={styles.rippleAnchor}>
-                    <SpiritRipple active={showHiddenRipple} progress={rippleProgress} />
+                    {hiddenRipples.map((ripple) => <SpiritRipple key={ripple.id} progress={ripple.progress} />)}
                   </View>
                   <Animated.View style={{ opacity: hiddenOverlayOpacity }}>
-                    <RawHexLine yinYang={hiddenSpirit.yinYang} muted={!isHiddenUseGodLine} highlightColor={isHiddenUseGodLine ? hiddenUseGodColor : undefined} yinGap={finalYinGap} />
+                    <RawHexLine yinYang={hiddenSpirit.yinYang} muted={!hiddenSpiritColor} highlightColor={hiddenSpiritColor} yinGap={finalYinGap} />
                   </Animated.View>
                 </Animated.View>
               </View>
@@ -738,6 +971,7 @@ function HexPairRow({
 export function AnalysisScreen({ navigation, route }: Props) {
   const { record } = route.params;
   const { width: windowWidth } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
   const [metaMode, setMetaMode] = useState<MetaMode>('sixKin');
   const [showStatus, setShowStatus] = useState(false);
   const [hideUnchangedChangedLines, setHideUnchangedChangedLines] = useState(false);
@@ -749,9 +983,15 @@ export function AnalysisScreen({ navigation, route }: Props) {
   const [fullTextHexagramName, setFullTextHexagramName] = useState<string | undefined>();
   const [selectedSpiritAnalysis, setSelectedSpiritAnalysis] = useState<SpiritAnalysis | undefined>();
   const [spiritReasonAnchor, setSpiritReasonAnchor] = useState({ x: 20, y: 120 });
-  const [rippleLineIndex, setRippleLineIndex] = useState<number | undefined>();
-  const [rippleIsHidden, setRippleIsHidden] = useState(false);
+  const [spiritRipples, setSpiritRipples] = useState<SpiritRippleItem[]>([]);
   const [selectedTextSection, setSelectedTextSection] = useState<HexagramTextSection>('judgment');
+  const [verificationNotes, setVerificationNotes] = useState<VerificationNote[]>([]);
+  const [pendingVerificationNote, setPendingVerificationNote] = useState<VerificationNote | undefined>();
+  const [armedDeleteNoteId, setArmedDeleteNoteId] = useState<number | undefined>();
+  const [moreMenuVisible, setMoreMenuVisible] = useState(false);
+  const [moreMenuMounted, setMoreMenuMounted] = useState(false);
+  const [savedRecord, setSavedRecord] = useState(false);
+  const [unsavedPromptVisible, setUnsavedPromptVisible] = useState(false);
   const [finalYinGap, setFinalYinGap] = useState(INTRO_YIN_GAP);
   const statusVisualProgress = useRef(new Animated.Value(0)).current;
   const statusColumnWidth = useRef(new Animated.Value(0)).current;
@@ -760,7 +1000,6 @@ export function AnalysisScreen({ navigation, route }: Props) {
   const metaTranslateX = useRef(new Animated.Value(0)).current;
   const metaSwitching = useRef(false);
   const hiddenSpiritOverlayProgress = useRef(new Animated.Value(0)).current;
-  const spiritRippleProgress = useRef(new Animated.Value(0)).current;
   const analysisPageScrollX = useRef(new Animated.Value(0)).current;
   const dividerCollapseProgress = useRef(new Animated.Value(0)).current;
   const dividerCollapseValue = useRef(0);
@@ -768,6 +1007,9 @@ export function AnalysisScreen({ navigation, route }: Props) {
   const fullTextScrollX = useRef(new Animated.Value(0)).current;
   const fullTextPagerRef = useRef<ScrollView | null>(null);
   const hiddenSpiritAutoHideTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const hiddenSpiritAutoHideToken = useRef(0);
+  const rippleIdRef = useRef(0);
+  const edgeBackGestureActive = useRef(false);
   const introBaseOpacity = useRef(new Animated.Value(0)).current;
   const introTransitionOpacity = useRef(new Animated.Value(0)).current;
   const introChangedOpacity = useRef(new Animated.Value(0)).current;
@@ -783,7 +1025,12 @@ export function AnalysisScreen({ navigation, route }: Props) {
   const introChangedHexTranslateY = useRef(new Animated.Value(0)).current;
   const introOverlayOpacity = useRef(new Animated.Value(1)).current;
   const mainOpacity = useRef(new Animated.Value(0)).current;
-  const annotationOpacity = useRef(new Animated.Value(0)).current;
+  const noteKeyboardLift = useRef(new Animated.Value(0)).current;
+  const noteInsertSpacerHeight = useRef(new Animated.Value(0)).current;
+  const moreMenuProgress = useRef(new Animated.Value(0)).current;
+  const moreBackdropProgress = useRef(new Animated.Value(0)).current;
+  const measuredNoteCardHeight = useRef(ESTIMATED_RESULT_NOTE_CARD_HEIGHT);
+  const addingNoteRef = useRef(false);
   const introBaseHexRef = useRef<View | null>(null);
   const introChangedHexRef = useRef<View | null>(null);
   const baseFinalTopLineRef = useRef<View | null>(null);
@@ -820,6 +1067,53 @@ export function AnalysisScreen({ navigation, route }: Props) {
     outputRange: [1, 0.35, 0],
     extrapolate: 'clamp',
   });
+
+  useEffect(() => {
+    UIManager.setLayoutAnimationEnabledExperimental?.(true);
+  }, []);
+
+  useEffect(() => {
+    const showSubscription = Keyboard.addListener('keyboardWillShow', (event) => {
+      const lift = -Math.min(Math.max(0, event.endCoordinates.height - insets.bottom) * 0.35, windowWidth * 0.35);
+      Animated.timing(noteKeyboardLift, {
+        toValue: lift,
+        duration: event.duration || 260,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }).start();
+    });
+    const hideSubscription = Keyboard.addListener('keyboardWillHide', (event) => {
+      Animated.timing(noteKeyboardLift, {
+        toValue: 0,
+        duration: event.duration || 240,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }).start();
+    });
+    const didShowSubscription = Keyboard.addListener('keyboardDidShow', (event) => {
+      const lift = -Math.min(Math.max(0, event.endCoordinates.height - insets.bottom) * 0.35, windowWidth * 0.35);
+      Animated.timing(noteKeyboardLift, {
+        toValue: lift,
+        duration: 180,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }).start();
+    });
+    const didHideSubscription = Keyboard.addListener('keyboardDidHide', () => {
+      Animated.timing(noteKeyboardLift, {
+        toValue: 0,
+        duration: 180,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }).start();
+    });
+    return () => {
+      showSubscription.remove();
+      hideSubscription.remove();
+      didShowSubscription.remove();
+      didHideSubscription.remove();
+    };
+  }, [insets.bottom, noteKeyboardLift, windowWidth]);
 
   const measureInWindow = useCallback((node: View | null) =>
     new Promise<LayoutRect | undefined>((resolve) => {
@@ -919,17 +1213,18 @@ export function AnalysisScreen({ navigation, route }: Props) {
   };
 
   const startSpiritRipple = (lineIndex: number, isHidden: boolean) => {
-    setRippleLineIndex(lineIndex);
-    setRippleIsHidden(isHidden);
-    spiritRippleProgress.stopAnimation();
-    spiritRippleProgress.setValue(0);
-    Animated.timing(spiritRippleProgress, {
+    const id = rippleIdRef.current + 1;
+    rippleIdRef.current = id;
+    const progress = new Animated.Value(0);
+    const ripple = { id, lineIndex, isHidden, progress };
+    setSpiritRipples((current) => [...current, ripple]);
+    Animated.timing(progress, {
       toValue: 1,
       duration: 1380,
       easing: Easing.out(Easing.cubic),
       useNativeDriver: true,
-    }).start(({ finished }) => {
-      if (finished) setRippleLineIndex(undefined);
+    }).start(() => {
+      setSpiritRipples((current) => current.filter((item) => item.id !== id));
     });
   };
 
@@ -943,13 +1238,165 @@ export function AnalysisScreen({ navigation, route }: Props) {
     if (analysis.isHidden) {
       const line = record.hexagram.lines.find((item) => item.index === analysis.lineIndex);
       if (line) showHiddenSpirit(line);
+      const hideToken = hiddenSpiritAutoHideToken.current + 1;
+      hiddenSpiritAutoHideToken.current = hideToken;
       hiddenSpiritAutoHideTimer.current = setTimeout(() => {
+        if (hiddenSpiritAutoHideToken.current !== hideToken) return;
         hideHiddenSpirit();
         hiddenSpiritAutoHideTimer.current = undefined;
       }, 1450);
       return;
     }
     hideHiddenSpirit();
+  };
+
+  const updateVerificationNote = (id: number, patch: Partial<VerificationNote>) => {
+    setArmedDeleteNoteId(undefined);
+    setVerificationNotes((notes) => notes.map((note) => (note.id === id ? { ...note, ...patch } : note)));
+  };
+
+  const deleteVerificationNote = (id: number) => {
+    setArmedDeleteNoteId(undefined);
+    LayoutAnimation.configureNext({
+      duration: 320,
+      update: { type: LayoutAnimation.Types.easeInEaseOut },
+      delete: { type: LayoutAnimation.Types.easeInEaseOut, property: LayoutAnimation.Properties.opacity },
+    });
+    setVerificationNotes((notes) => notes.filter((note) => note.id !== id));
+  };
+
+  const addVerificationNote = () => {
+    if (addingNoteRef.current) return;
+    setArmedDeleteNoteId(undefined);
+    addingNoteRef.current = true;
+    animateDividerCollapse(1);
+    const id = Date.now();
+    const createdAt = new Date().toISOString();
+    const nextNote = { id, fulfilled: true, note: '', createdAt };
+    const targetHeight = measuredNoteCardHeight.current;
+
+    noteInsertSpacerHeight.stopAnimation(() => {
+      noteInsertSpacerHeight.setValue(0);
+      setPendingVerificationNote(nextNote);
+      Animated.timing(noteInsertSpacerHeight, {
+        toValue: targetHeight,
+        duration: 360,
+        easing: Easing.inOut(Easing.cubic),
+        useNativeDriver: false,
+      }).start(({ finished }) => {
+        if (!finished) {
+          addingNoteRef.current = false;
+          return;
+        }
+        setVerificationNotes((notes) => [...notes, nextNote]);
+        setPendingVerificationNote(undefined);
+        requestAnimationFrame(() => {
+          noteInsertSpacerHeight.setValue(0);
+        });
+        setTimeout(() => {
+          addingNoteRef.current = false;
+        }, 380);
+      });
+    });
+  };
+
+  const focusVerificationInput = () => {
+    setArmedDeleteNoteId(undefined);
+    animateDividerCollapse(1);
+  };
+
+  const openMoreMenu = () => {
+    setMoreMenuMounted(true);
+    setMoreMenuVisible(true);
+    moreMenuProgress.stopAnimation();
+    moreBackdropProgress.stopAnimation();
+    Animated.parallel([
+      Animated.timing(moreBackdropProgress, {
+        toValue: 1,
+        duration: 380,
+        easing: Easing.bezier(0.22, 1, 0.36, 1),
+        useNativeDriver: true,
+      }),
+      Animated.timing(moreMenuProgress, {
+        toValue: 1,
+        duration: 300,
+        easing: Easing.bezier(0.16, 1, 0.3, 1),
+        useNativeDriver: true,
+      }),
+    ]).start();
+  };
+
+  const closeMoreMenu = () => {
+    setMoreMenuVisible(false);
+    moreMenuProgress.stopAnimation();
+    moreBackdropProgress.stopAnimation();
+    Animated.parallel([
+      Animated.timing(moreBackdropProgress, {
+        toValue: 0,
+        duration: 300,
+        easing: Easing.bezier(0.4, 0, 0.2, 1),
+        useNativeDriver: true,
+      }),
+      Animated.timing(moreMenuProgress, {
+        toValue: 0,
+        duration: 250,
+        easing: Easing.bezier(0.4, 0, 0.2, 1),
+        useNativeDriver: true,
+      }),
+    ]).start(({ finished }) => {
+      if (finished) setMoreMenuMounted(false);
+    });
+  };
+
+  const toggleMoreMenu = () => {
+    if (moreMenuVisible) {
+      closeMoreMenu();
+      return;
+    }
+    openMoreMenu();
+  };
+
+  const shareRecord = async () => {
+    closeMoreMenu();
+    await Share.share({
+      message: [
+        `六爻起卦：${record.hexagram.name}${hasChangedHexagram ? ` 变 ${record.hexagram.changedName}` : ''}`,
+        `所问：${record.question}`,
+        `时间：${formatCompactChineseDateTime(record.createdAt)}`,
+        `干支：${formatStemBranchDateTime(record.lunarInfo)}`,
+      ].join('\n'),
+    });
+  };
+
+  const saveCurrentRecord = async () => {
+    closeMoreMenu();
+    await saveRecord(record);
+    setSavedRecord(true);
+    navigation.navigate('Save');
+  };
+
+  const saveAndLeave = async () => {
+    await saveRecord(record);
+    setSavedRecord(true);
+    setUnsavedPromptVisible(false);
+    navigation.goBack();
+  };
+
+  const leaveWithoutSaving = () => {
+    setUnsavedPromptVisible(false);
+    navigation.goBack();
+  };
+
+  const closeUnsavedPrompt = () => {
+    setUnsavedPromptVisible(false);
+  };
+
+  const promptBeforeLeaving = () => {
+    if (savedRecord) {
+      navigation.goBack();
+      return;
+    }
+    setUnsavedPromptVisible(true);
   };
 
   const animateDividerCollapse = (toValue: number) => {
@@ -1006,6 +1453,29 @@ export function AnalysisScreen({ navigation, route }: Props) {
       onPanResponderTerminate: () => {
         animateDividerCollapse(dividerCollapseValue.current > 0.5 ? 1 : 0);
         hideDividerGrip();
+      },
+    })
+  ).current;
+
+  const edgeBackPanResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: (event) => {
+        edgeBackGestureActive.current = event.nativeEvent.pageX <= 24;
+        return false;
+      },
+      onMoveShouldSetPanResponder: (event, gesture) => {
+        const startsAtEdge = edgeBackGestureActive.current || event.nativeEvent.pageX <= 24;
+        const horizontalSwipe = gesture.dx > 12 && Math.abs(gesture.dx) > Math.abs(gesture.dy) * 1.4;
+        return startsAtEdge && horizontalSwipe && !unsavedPromptVisible;
+      },
+      onPanResponderRelease: (_, gesture) => {
+        if (gesture.dx > 64 || gesture.vx > 0.45) {
+          promptBeforeLeaving();
+        }
+        edgeBackGestureActive.current = false;
+      },
+      onPanResponderTerminate: () => {
+        edgeBackGestureActive.current = false;
       },
     })
   ).current;
@@ -1161,32 +1631,32 @@ export function AnalysisScreen({ navigation, route }: Props) {
     const introRevealSequence = Animated.sequence([
       Animated.timing(introBaseOpacity, {
         toValue: 1,
-        duration: 420,
+        duration: 540,
         easing: Easing.out(Easing.cubic),
         useNativeDriver: true,
       }),
       Animated.timing(introTransitionOpacity, {
         toValue: hasChangedHexagram ? 1 : 0,
-        duration: hasChangedHexagram ? 300 : 1,
+        duration: hasChangedHexagram ? 380 : 1,
         easing: Easing.out(Easing.cubic),
         useNativeDriver: true,
       }),
       Animated.timing(introChangedOpacity, {
         toValue: hasChangedHexagram ? 1 : 0,
-        duration: hasChangedHexagram ? 420 : 1,
+        duration: hasChangedHexagram ? 540 : 1,
         easing: Easing.out(Easing.cubic),
         useNativeDriver: true,
       }),
       Animated.parallel([
         Animated.timing(introTextOpacity, {
           toValue: 0,
-          duration: 340,
+          duration: 440,
           easing: Easing.inOut(Easing.cubic),
           useNativeDriver: true,
         }),
         Animated.timing(introHexOpacity, {
           toValue: 1,
-          duration: 420,
+          duration: 540,
           easing: Easing.out(Easing.cubic),
           useNativeDriver: true,
         }),
@@ -1219,7 +1689,7 @@ export function AnalysisScreen({ navigation, route }: Props) {
           useNativeDriver: true,
         }),
       ]),
-      Animated.delay(260),
+      Animated.delay(360),
     ]);
 
     startAnimation(introRevealSequence);
@@ -1234,80 +1704,72 @@ export function AnalysisScreen({ navigation, route }: Props) {
           Animated.parallel([
             Animated.timing(introBaseHexTranslateX, {
               toValue: motion?.base?.translateX ?? 0,
-              duration: 720,
+              duration: 920,
               easing: Easing.inOut(Easing.cubic),
               useNativeDriver: true,
             }),
             Animated.timing(introBaseHexTranslateY, {
               toValue: motion?.base?.translateY ?? -138,
-              duration: 720,
+              duration: 920,
               easing: Easing.inOut(Easing.cubic),
               useNativeDriver: true,
             }),
             Animated.timing(introBaseHexScaleX, {
               toValue: motion?.base?.scaleX ?? 1,
-              duration: 720,
+              duration: 920,
               easing: Easing.inOut(Easing.cubic),
               useNativeDriver: true,
             }),
             Animated.timing(introBaseHexScaleY, {
               toValue: motion?.base?.scaleY ?? 1,
-              duration: 720,
+              duration: 920,
               easing: Easing.inOut(Easing.cubic),
               useNativeDriver: true,
             }),
             Animated.timing(introChangedHexTranslateX, {
               toValue: motion?.changed?.translateX ?? motion?.base?.translateX ?? 0,
-              duration: 720,
+              duration: 920,
               easing: Easing.inOut(Easing.cubic),
               useNativeDriver: true,
             }),
             Animated.timing(introChangedHexTranslateY, {
               toValue: motion?.changed?.translateY ?? motion?.base?.translateY ?? -138,
-              duration: 720,
+              duration: 920,
               easing: Easing.inOut(Easing.cubic),
               useNativeDriver: true,
             }),
             Animated.timing(introChangedHexScaleX, {
               toValue: motion?.changed?.scaleX ?? motion?.base?.scaleX ?? 1,
-              duration: 720,
+              duration: 920,
               easing: Easing.inOut(Easing.cubic),
               useNativeDriver: true,
             }),
             Animated.timing(introChangedHexScaleY, {
               toValue: motion?.changed?.scaleY ?? motion?.base?.scaleY ?? 1,
-              duration: 720,
+              duration: 920,
               easing: Easing.inOut(Easing.cubic),
               useNativeDriver: true,
             }),
           ]),
           Animated.timing(mainOpacity, {
             toValue: 1,
-            duration: 760,
+            duration: 900,
             easing: Easing.out(Easing.cubic),
             useNativeDriver: true,
           }),
           Animated.parallel([
             Animated.timing(introOverlayOpacity, {
               toValue: 0,
-              duration: 760,
+              duration: 900,
               easing: Easing.out(Easing.cubic),
               useNativeDriver: true,
             }),
             Animated.timing(introHexOpacity, {
               toValue: 0,
-              duration: 520,
+              duration: 680,
               easing: Easing.out(Easing.cubic),
               useNativeDriver: true,
             }),
-            Animated.sequence([
-              Animated.timing(annotationOpacity, {
-                toValue: 1,
-                duration: 600,
-                easing: Easing.out(Easing.cubic),
-                useNativeDriver: true,
-              }),
-            ]),
           ]),
         ]);
 
@@ -1325,7 +1787,6 @@ export function AnalysisScreen({ navigation, route }: Props) {
       if (hiddenSpiritAutoHideTimer.current) clearTimeout(hiddenSpiritAutoHideTimer.current);
     };
   }, [
-    annotationOpacity,
     calculateIntroMotion,
     hasChangedHexagram,
     introBaseOpacity,
@@ -1354,9 +1815,13 @@ export function AnalysisScreen({ navigation, route }: Props) {
   }, [measureInWindow, syncFinalYinGap, windowWidth, showStatus, hideUnchangedChangedLines]);
 
   return (
-    <SafeAreaView style={styles.container}>
+    <View style={[styles.container, { paddingTop: insets.top }]}>
+      <View style={styles.edgeBackGestureArea} {...edgeBackPanResponder.panHandlers} />
+      <Animated.View pointerEvents={moreMenuVisible ? 'auto' : 'none'} style={[styles.moreMenuBackdrop, { opacity: moreBackdropProgress }]}>
+        <Pressable style={StyleSheet.absoluteFill} onPress={closeMoreMenu} />
+      </Animated.View>
       <Animated.View style={[styles.content, { opacity: mainOpacity }]}>
-        <Animated.View style={[styles.header, { opacity: annotationOpacity }]}>
+        <View style={styles.header}>
           {hasChangedHexagram ? (
             <View style={styles.titleRow}>
               <Pressable onPress={(event) => openHexagramText(record.hexagram.name, event)}>
@@ -1373,9 +1838,9 @@ export function AnalysisScreen({ navigation, route }: Props) {
             </Pressable>
           )}
           <Text style={styles.subtitle}>{record.question}</Text>
-        </Animated.View>
+        </View>
         <Animated.View style={[styles.collapsibleTop, { height: collapsibleHeight, opacity: collapsibleOpacity }]}>
-          <Animated.View style={styles.dateInfoRow}>
+          <View style={styles.dateInfoRow}>
             <Pressable style={styles.dateInfoItem} onPress={toggleStatus}>
               <Text style={styles.dateInfoLabel}>月建</Text>
               <Text style={[styles.dateInfoValue, { color: stemBranchColor(record.lunarInfo.monthStemBranch) }]}>{record.lunarInfo.monthStemBranch}</Text>
@@ -1387,9 +1852,9 @@ export function AnalysisScreen({ navigation, route }: Props) {
                 <Text style={styles.dateInfoSub}>旬空 {record.lunarInfo.voidBranches.join('')}</Text>
               </View>
             </Pressable>
-          </Animated.View>
+          </View>
           <View style={styles.hexagramStage}>
-            <Animated.View style={styles.hexHeaderRow}>
+            <View style={styles.hexHeaderRow}>
               <View style={styles.hexHeaderSide} />
               <View style={styles.hexGroup}>
                 <Pressable style={styles.hexHeaderTitleButton} onPress={(event) => openHexagramText(record.hexagram.name, event)}>
@@ -1409,7 +1874,7 @@ export function AnalysisScreen({ navigation, route }: Props) {
                   </Pressable>
                 </View>
               ) : null}
-            </Animated.View>
+            </View>
             <View style={styles.hexagramCore}>
             {record.hexagram.lines
               .slice()
@@ -1447,7 +1912,7 @@ export function AnalysisScreen({ navigation, route }: Props) {
                           ? (node) => { changedFinalBottomLineRef.current = node; }
                           : undefined
                     }
-                    annotationOpacity={annotationOpacity}
+                    annotationOpacity={mainOpacity}
                     mode={metaMode}
                     onToggleMode={toggleMetaMode}
                     onToggleUnchangedChangedLines={toggleUnchangedChangedLines}
@@ -1460,15 +1925,13 @@ export function AnalysisScreen({ navigation, route }: Props) {
                     useGodColor={useGodColor}
                     finalYinGap={finalYinGap}
                     spiritAnalyses={spiritAnalyses}
-                    rippleLineIndex={rippleLineIndex}
-                    rippleIsHidden={rippleIsHidden}
-                    rippleProgress={spiritRippleProgress}
+                    ripples={spiritRipples}
                   />
                 );
               })}
             </View>
             {hasHexagramMarks ? (
-              <Animated.View style={styles.hexMarkLayoutRow}>
+              <View style={styles.hexMarkLayoutRow}>
                 <View style={styles.hexHeaderSide} />
                 <View style={styles.hexGroup}>
                   <View style={styles.hexColumn}>
@@ -1484,7 +1947,7 @@ export function AnalysisScreen({ navigation, route }: Props) {
                     <View style={styles.metaColumn} />
                   </View>
                 ) : null}
-              </Animated.View>
+              </View>
             ) : null}
           </View>
         </Animated.View>
@@ -1495,9 +1958,99 @@ export function AnalysisScreen({ navigation, route }: Props) {
           <Animated.View style={[styles.dividerHandleGrip, { opacity: dividerGripOpacity }]} />
         </Animated.View>
       </Animated.View>
+      <Animated.View
+        pointerEvents="box-none"
+        style={[
+          styles.moreMenuLayer,
+          {
+            opacity: mainOpacity,
+            top: insets.top,
+          },
+        ]}
+      >
+        <Pressable
+          style={[styles.moreButton, moreMenuVisible ? styles.moreButtonActive : null]}
+          onPress={toggleMoreMenu}
+        >
+          <Animated.View
+            pointerEvents="none"
+            style={[
+              styles.moreButtonDots,
+              {
+                opacity: moreMenuProgress.interpolate({ inputRange: [0, 0.45, 1], outputRange: [1, 0, 0] }),
+                transform: [
+                  {
+                    scale: moreMenuProgress.interpolate({ inputRange: [0, 1], outputRange: [1, 0.72] }),
+                  },
+                ],
+              },
+            ]}
+          >
+            <View style={styles.moreButtonDot} />
+            <View style={styles.moreButtonDot} />
+            <View style={styles.moreButtonDot} />
+          </Animated.View>
+          <Animated.Text
+            pointerEvents="none"
+            style={[
+              styles.moreButtonClose,
+              {
+                opacity: moreMenuProgress.interpolate({ inputRange: [0, 0.45, 1], outputRange: [0, 0, 1] }),
+                transform: [
+                  {
+                    scale: moreMenuProgress.interpolate({ inputRange: [0, 1], outputRange: [0.72, 1] }),
+                  },
+                ],
+              },
+            ]}
+          >
+            ×
+          </Animated.Text>
+        </Pressable>
+        {moreMenuMounted ? (
+          <Animated.View
+            pointerEvents={moreMenuVisible ? 'auto' : 'none'}
+            style={[
+              styles.moreMenuCard,
+              {
+                opacity: moreMenuProgress,
+                transform: [
+                  {
+                    translateY: moreMenuProgress.interpolate({ inputRange: [0, 1], outputRange: [-8, 0] }),
+                  },
+                  {
+                    scale: moreMenuProgress.interpolate({ inputRange: [0, 1], outputRange: [0.94, 1] }),
+                  },
+                ],
+              },
+            ]}
+          >
+            <Animated.View
+              style={{
+                opacity: moreMenuProgress.interpolate({ inputRange: [0, 0.35, 1], outputRange: [0, 0, 1] }),
+                transform: [
+                  {
+                    translateY: moreMenuProgress.interpolate({ inputRange: [0, 1], outputRange: [-3, 0] }),
+                  },
+                ],
+              }}
+            >
+              <Pressable style={styles.moreMenuItem} onPress={shareRecord}>
+                <Text style={styles.moreMenuIcon}>↗</Text>
+                <Text style={styles.moreMenuText}>分享</Text>
+              </Pressable>
+              <View style={styles.moreMenuDivider} />
+              <Pressable style={styles.moreMenuItem} onPress={saveCurrentRecord}>
+                <Text style={styles.moreMenuIcon}>✓</Text>
+                <Text style={styles.moreMenuText}>保存</Text>
+              </Pressable>
+            </Animated.View>
+          </Animated.View>
+        ) : null}
+      </Animated.View>
       <View pointerEvents="none" style={styles.contentBottomMask} />
-      <Animated.View style={[styles.summaryBlock, { opacity: annotationOpacity }]}>
-        <Animated.View pointerEvents="none" style={[styles.analysisTabsOverlay, { opacity: annotationOpacity }]}>
+      <Animated.View style={[styles.summaryBlock, { opacity: mainOpacity }]}>
+        <Animated.View pointerEvents="none" style={[styles.analysisTabsOverlay, { opacity: mainOpacity }]}>
           <AnalysisPageTabs scrollX={analysisPageScrollX} pageWidth={analysisPageWidth} />
         </Animated.View>
         <Animated.ScrollView
@@ -1516,7 +2069,7 @@ export function AnalysisScreen({ navigation, route }: Props) {
         >
             <Animated.ScrollView
               style={[styles.analysisPage, { width: analysisPageWidth }]}
-              contentContainerStyle={styles.analysisPageContent}
+              contentContainerStyle={[styles.analysisPageContent, styles.spiritPageContent]}
               showsVerticalScrollIndicator={false}
               scrollEventThrottle={16}
             >
@@ -1554,13 +2107,67 @@ export function AnalysisScreen({ navigation, route }: Props) {
                 <Text style={styles.unionText}>{record.analysis.sanHe || '当前未见明显合局。'}</Text>
               </View>
             </Animated.ScrollView>
+            <Animated.ScrollView
+              style={[styles.analysisPage, { width: analysisPageWidth }]}
+              contentContainerStyle={styles.analysisPageContent}
+              showsVerticalScrollIndicator={false}
+              scrollEventThrottle={16}
+              keyboardShouldPersistTaps="handled"
+            >
+              <Pressable
+                style={styles.resultDismissLayer}
+                onPress={() => {
+                  setArmedDeleteNoteId(undefined);
+                  Keyboard.dismiss();
+                }}
+              >
+              <View style={styles.resultInfoCard}>
+                <Text style={styles.unionTitle}>起卦信息</Text>
+                <ResultInfoRow label="现代时间" value={formatCompactChineseDateTime(record.createdAt)} />
+                <ResultInfoRow
+                  label="干支时间"
+                  value={formatStemBranchDateTime(record.lunarInfo)}
+                />
+                <ResultInfoRow label="问卦人" value="未填写" />
+                <ResultInfoRow label="性别" value="未填写" />
+              </View>
+              {verificationNotes.map((note) => (
+                <VerificationNoteCard
+                  key={note.id}
+                  note={note}
+                  deleteArmed={armedDeleteNoteId === note.id}
+                  onArmDelete={setArmedDeleteNoteId}
+                  onUpdate={updateVerificationNote}
+                  onDelete={deleteVerificationNote}
+                  onFocus={focusVerificationInput}
+                  keyboardLift={noteKeyboardLift}
+                  onMeasured={(height) => {
+                    if (height > 0 && !addingNoteRef.current) {
+                      measuredNoteCardHeight.current = height;
+                    }
+                  }}
+                />
+              ))}
+              {pendingVerificationNote ? <Animated.View style={[styles.resultNotePlaceholder, { height: noteInsertSpacerHeight }]} /> : null}
+              <Pressable
+                style={styles.addResultCard}
+                onPress={(event) => {
+                  event.stopPropagation();
+                  addVerificationNote();
+                }}
+              >
+                <Text style={styles.addResultIcon}>＋</Text>
+                <Text style={styles.addResultText}>新增批注</Text>
+              </Pressable>
+              </Pressable>
+            </Animated.ScrollView>
         </Animated.ScrollView>
       </Animated.View>
-      <Animated.View style={[styles.bottomAction, { opacity: annotationOpacity }]}>
-        <Pressable style={styles.button} onPress={() => navigation.navigate('AIReading', { record })}>
-          <Text style={styles.buttonText}>进入 AI 解卦</Text>
-        </Pressable>
-      </Animated.View>
+      <VerificationNoteMeasureCard
+        onMeasured={(height) => {
+          measuredNoteCardHeight.current = height;
+        }}
+      />
       {showIntro ? (
         <Animated.View pointerEvents="none" style={[styles.introOverlay, { opacity: introOverlayOpacity }]}>
           <Animated.View style={[styles.introTitleRow, { opacity: introTextOpacity }]}>
@@ -1720,7 +2327,24 @@ export function AnalysisScreen({ navigation, route }: Props) {
           </View>
         </View>
       </Modal>
-    </SafeAreaView>
+      <Modal transparent visible={unsavedPromptVisible} animationType="fade" onRequestClose={closeUnsavedPrompt}>
+        <View style={styles.unsavedBackdrop}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={closeUnsavedPrompt} />
+          <View style={styles.unsavedCard}>
+            <Text style={styles.unsavedTitle}>本次起卦尚未保存</Text>
+            <Text style={styles.unsavedBody}>离开后将无法在历史记录中查看这次卦象与分析。</Text>
+            <View style={styles.unsavedActions}>
+              <Pressable style={[styles.unsavedButton, styles.unsavedSecondaryButton]} onPress={leaveWithoutSaving}>
+                <Text style={styles.unsavedSecondaryText}>不保存</Text>
+              </Pressable>
+              <Pressable style={[styles.unsavedButton, styles.unsavedPrimaryButton]} onPress={saveAndLeave}>
+                <Text style={styles.unsavedPrimaryText}>保存</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+    </View>
   );
 }
 
@@ -1776,7 +2400,77 @@ const styles = StyleSheet.create({
     shadowRadius: 12,
     shadowOffset: { width: 0, height: 8 },
   },
-  header: { gap: 6 },
+  moreMenuBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.22)',
+    zIndex: 20,
+    elevation: 20,
+  },
+  moreMenuLayer: {
+    position: 'absolute',
+    left: 12,
+    right: 12,
+    height: 190,
+    zIndex: 34,
+    elevation: 34,
+  },
+  moreButton: {
+    position: 'absolute',
+    right: 14,
+    top: 14,
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: '#f0f0f0',
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+    zIndex: 32,
+    elevation: 32,
+  },
+  moreButtonActive: { backgroundColor: '#000' },
+  moreButtonDots: {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    width: 34,
+    height: 34,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 2.5,
+  },
+  moreButtonDot: { width: 3.5, height: 3.5, borderRadius: 1.75, backgroundColor: '#111' },
+  moreButtonClose: {
+    position: 'absolute',
+    left: 0,
+    top: -1,
+    width: 34,
+    height: 34,
+    color: '#fff',
+    fontSize: 25,
+    fontWeight: '700',
+    lineHeight: 34,
+    textAlign: 'center',
+    includeFontPadding: false,
+  },
+  moreMenuCard: {
+    ...SOFT_SHADOW,
+    position: 'absolute',
+    right: 14,
+    top: 54,
+    width: 128,
+    borderRadius: 16,
+    backgroundColor: '#fff',
+    paddingVertical: 8,
+    zIndex: 31,
+    elevation: 31,
+  },
+  moreMenuItem: { height: 42, flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 14 },
+  moreMenuIcon: { width: 20, color: '#111', fontSize: 17, fontWeight: '900', textAlign: 'center' },
+  moreMenuText: { color: '#111', fontSize: 14, fontWeight: '900' },
+  moreMenuDivider: { height: 1, backgroundColor: '#ededed', marginHorizontal: 12 },
+  header: { gap: 6, paddingRight: 44 },
   title: { color: '#000', fontSize: 28, fontWeight: '800' },
   titleRow: { flexDirection: 'row', alignItems: 'baseline', flexWrap: 'wrap', columnGap: 8, rowGap: 2 },
   titleTransition: { color: '#777', fontSize: 15, fontWeight: '800' },
@@ -1970,7 +2664,7 @@ const styles = StyleSheet.create({
   dividerHandleGrip: { width: 38, height: 4, borderRadius: 2, backgroundColor: '#d9d9d9' },
   analysisTabsOverlay: { position: 'absolute', top: 40, left: -20, right: -20, zIndex: 80, elevation: 80, alignItems: 'center' },
   analysisTabs: { alignItems: 'center' },
-  analysisTabsInner: { width: 112, height: 28, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', position: 'relative' },
+  analysisTabsInner: { width: 168, height: 28, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', position: 'relative' },
   analysisTabPill: {
     position: 'absolute',
     left: 0,
@@ -1992,8 +2686,11 @@ const styles = StyleSheet.create({
   analysisPager: { flex: 1, marginHorizontal: -20, backgroundColor: '#f7f7f7' },
   analysisPage: { flex: 1, backgroundColor: '#f7f7f7' },
   analysisPageContent: { paddingHorizontal: 20, paddingTop: 72, paddingBottom: 12, gap: 10 },
-  spiritCardList: { gap: 10 },
+  resultDismissLayer: { gap: 15 },
+  spiritPageContent: { flexGrow: 1 },
+  spiritCardList: { flex: 1, gap: 10 },
   spiritAnalysisCard: {
+    flex: 1,
     borderRadius: 14,
     padding: 12,
     gap: 5,
@@ -2020,12 +2717,150 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 6 },
     elevation: 8,
   },
+  resultInfoCard: {
+    minHeight: 160,
+    borderRadius: 14,
+    padding: 14,
+    gap: 10,
+    backgroundColor: '#e6f0f8',
+    shadowColor: '#000',
+    shadowOpacity: 0.16,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 8,
+  },
+  resultInfoRow: { flexDirection: 'row', justifyContent: 'space-between', gap: 12 },
+  resultInfoLabel: { width: 68, color: '#555', fontSize: 12, fontWeight: '800', lineHeight: 18 },
+  resultInfoValue: { flex: 1, color: '#111', fontSize: 12, fontWeight: '800', lineHeight: 18, textAlign: 'right' },
+  resultNoteCard: {
+    borderRadius: 14,
+    padding: 14,
+    gap: 12,
+    overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOpacity: 0.16,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 8,
+  },
+  resultNoteMeasureCard: {
+    position: 'absolute',
+    left: 20,
+    right: 20,
+    top: -1000,
+    opacity: 0,
+    zIndex: -1,
+  },
+  resultNotePlaceholder: { height: 194 },
+  resultNoteBackground: { ...StyleSheet.absoluteFillObject },
+  resultNoteFulfilledBackground: { backgroundColor: '#dceee1' },
+  resultNoteUnfulfilledBackground: { backgroundColor: '#f4ddd7' },
+  resultNoteHeader: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 },
+  resultNoteTime: { color: '#666', fontSize: 10, fontWeight: '700', marginTop: 3 },
+  deleteIconButton: { width: 30, height: 30, alignItems: 'center', justifyContent: 'center', position: 'relative' },
+  deleteIconBackground: {
+    position: 'absolute',
+    left: 1,
+    top: 1,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: 'rgba(255,255,255,0.72)',
+    shadowColor: '#000',
+    shadowOpacity: 0.12,
+    shadowRadius: 7,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 4,
+  },
+  deleteIconText: {
+    position: 'absolute',
+    left: 0,
+    top: -1,
+    width: 30,
+    height: 30,
+    color: '#111',
+    fontSize: 22,
+    fontWeight: '700',
+    lineHeight: 30,
+    textAlign: 'center',
+    includeFontPadding: false,
+  },
+  deleteIconTextArmed: { color: '#d63f31' },
+  deleteIconOverlayText: {},
+  fulfillmentSwitchRow: { flexDirection: 'row', backgroundColor: 'rgba(0,0,0,0.08)', borderRadius: 13, padding: 4, gap: 4, overflow: 'hidden', position: 'relative' },
+  fulfillmentSwitchIndicator: {
+    position: 'absolute',
+    left: 4,
+    top: 4,
+    bottom: 4,
+    borderRadius: 10,
+    backgroundColor: '#fff',
+    shadowColor: '#000',
+    shadowOpacity: 0.16,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 5,
+  },
+  fulfillmentSwitchOption: { flex: 1, height: 34, borderRadius: 10, alignItems: 'center', justifyContent: 'center', zIndex: 2 },
+  fulfillmentSwitchText: { color: '#555', fontSize: 12, fontWeight: '900' },
+  fulfillmentActiveText: { color: '#111' },
+  resultNoteInputWrap: { position: 'relative' },
+  resultNoteInput: { minHeight: 86, borderRadius: 11, backgroundColor: 'rgba(255,255,255,0.78)', padding: 12, color: '#111', fontSize: 13, lineHeight: 19, fontWeight: '700' },
+  addResultCard: {
+    height: 66,
+    borderRadius: 14,
+    backgroundColor: '#000',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+    shadowColor: '#000',
+    shadowOpacity: 0.12,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 5 },
+    elevation: 6,
+  },
+  addResultIcon: { color: '#fff', fontSize: 24, fontWeight: '600', lineHeight: 28 },
+  addResultText: { color: '#fff', fontSize: 12, fontWeight: '900' },
   unionTitle: { color: '#000', fontSize: 13, fontWeight: '900' },
   unionText: { color: '#333', fontSize: 12, lineHeight: 19, fontWeight: '600' },
-  bottomAction: { paddingHorizontal: 20, paddingTop: 8, paddingBottom: 12 },
+  saveRecordButton: { height: 44, borderRadius: 8, backgroundColor: '#000', alignItems: 'center', justifyContent: 'center', marginTop: 2 },
+  saveRecordButtonText: { color: '#fff', fontSize: 14, fontWeight: '900' },
   spiritReasonCard: { ...SOFT_SHADOW, position: 'absolute', width: 260, borderRadius: 16, backgroundColor: '#fff', borderWidth: 1, borderColor: '#d8d8d8', padding: 14, gap: 9 },
   spiritReasonTitle: { color: '#000', fontSize: 15, fontWeight: '900' },
   spiritReasonBody: { color: '#222', fontSize: 13, lineHeight: 20, fontWeight: '600' },
+  unsavedBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.34)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 28,
+  },
+  unsavedCard: {
+    ...SOFT_SHADOW,
+    width: '100%',
+    maxWidth: 340,
+    borderRadius: 22,
+    backgroundColor: '#fff',
+    padding: 20,
+    gap: 12,
+  },
+  unsavedTitle: { color: '#000', fontSize: 18, fontWeight: '900', textAlign: 'center' },
+  unsavedBody: { color: '#444', fontSize: 13, lineHeight: 20, fontWeight: '600', textAlign: 'center' },
+  unsavedActions: { flexDirection: 'row', gap: 10, marginTop: 4 },
+  unsavedButton: { flex: 1, height: 44, borderRadius: 13, alignItems: 'center', justifyContent: 'center' },
+  unsavedSecondaryButton: { backgroundColor: '#f1f1f1' },
+  unsavedPrimaryButton: { backgroundColor: '#000' },
+  unsavedSecondaryText: { color: '#111', fontSize: 14, fontWeight: '900' },
+  unsavedPrimaryText: { color: '#fff', fontSize: 14, fontWeight: '900' },
+  edgeBackGestureArea: {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    bottom: 0,
+    width: 28,
+    zIndex: 80,
+    elevation: 80,
+  },
   analysisGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   ruleCard: { width: '100%', borderWidth: 1, borderColor: '#000', padding: 12, gap: 4 },
   ruleTitle: { color: '#000', fontSize: 13, fontWeight: '800' },
@@ -2033,6 +2868,4 @@ const styles = StyleSheet.create({
   itemCard: { width: '48%', borderWidth: 1, borderColor: '#000', padding: 12, minHeight: 76, justifyContent: 'space-between' },
   itemTitle: { color: '#555', fontSize: 11, fontWeight: '700' },
   itemValue: { color: '#000', fontSize: 14, fontWeight: '800', lineHeight: 20 },
-  button: { height: 50, borderRadius: 6, backgroundColor: '#000', alignItems: 'center', justifyContent: 'center' },
-  buttonText: { color: '#fff', fontSize: 15, fontWeight: '800' },
 });

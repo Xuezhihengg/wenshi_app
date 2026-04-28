@@ -7,4 +7,5 @@ export type RootStackParamList = {
   AIReading: { record: FortuneRecord };
   Save: { record?: FortuneRecord } | undefined;
   Profile: undefined;
+  Settings: undefined;
 };

@@ -10,14 +10,15 @@ function randomLineStrength(): 6 | 7 | 8 | 9 {
 }
 
 export function createFortuneRecord(question: string, aiReading?: string): FortuneRecord {
+  const castAt = new Date();
   const strengths = Array.from({ length: 6 }, () => randomLineStrength());
-  const lunarInfo = buildLunarInfo(question);
+  const lunarInfo = buildLunarInfo(question, castAt);
   const hexagram = generateHexagram(strengths, lunarInfo);
   const analysis: AnalysisResult = analyzeHexagram(question, hexagram, lunarInfo);
   return {
     id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
     question,
-    createdAt: new Date().toISOString(),
+    createdAt: castAt.toISOString(),
     hexagram,
     lunarInfo,
     analysis,

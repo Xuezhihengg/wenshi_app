@@ -964,8 +964,8 @@ export function ensureTestHiddenSpirit(hexagram: Hexagram, lunarInfo?: LunarInfo
   };
 }
 
-export function buildLunarInfo(question: string): LunarInfo {
-  const now = new Date();
+export function buildLunarInfo(question: string, date = new Date()): LunarInfo {
+  const now = date;
   const hour = String(now.getHours()).padStart(2, '0');
   const minute = String(now.getMinutes()).padStart(2, '0');
   const solar = Solar.fromYmdHms(
@@ -988,6 +988,7 @@ export function buildLunarInfo(question: string): LunarInfo {
     dayStemBranch: lunar.getDayInGanZhiExact2(),
     monthStemBranch: lunar.getMonthInGanZhiExact(),
     yearStemBranch: lunar.getYearInGanZhiByLiChun(),
+    timeStemBranch: lunar.getTimeInGanZhi(),
     dayXun: lunar.getDayXunExact2(),
     voidBranches: voidText.split(''),
     prevSolarTerm: `${prevTerm.getName()} ${prevTerm.getSolar().toYmdHms()}`,
