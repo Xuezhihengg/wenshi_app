@@ -3,7 +3,9 @@ import * as Haptics from 'expo-haptics';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Animated, Easing, Pressable, SafeAreaView, StyleSheet, Text, View, type GestureResponderEvent } from 'react-native';
 import { FortuneCoin } from '../components/FortuneCoin';
+import { useAppTheme } from '../theme/AppTheme';
 import { RootStackParamList } from '../navigation/types';
+import { TranslationKey, useAppLanguage } from '../i18n/AppLanguage';
 import {
   analyzeHexagram,
   buildLunarInfo,
@@ -14,26 +16,17 @@ import {
   generateTestStrengths,
 } from '../utils/fortune';
 
-const COIN_LABELS = ['一', '二', '三'];
-const STILLNESS_LINE_POOLS = [
-  ['此刻', '放下杂念', '只问真心'],
-  ['一念既起', '万象暂息', '只留所问'],
-  ['静下来', '听见心里的声音', '让卦自己成形'],
-  ['收住纷扰', '照见当下', '以诚起卦'],
-  ['不求多念', '不问旁枝', '只问此心'],
-  ['心息归一', '所念分明', '六爻将现'],
-  ['把世界放轻', '把问题放正', '把答案交给此刻'],
-  ['闭一闭心门', '留一线真意', '轻触即起'],
+const COIN_LABEL_KEYS: TranslationKey[] = ['cast.coinOne', 'cast.coinTwo', 'cast.coinThree'];
+const STILLNESS_LINE_POOL_KEYS: TranslationKey[][] = [
+  ['cast.stillnessSetOneLineOne', 'cast.stillnessSetOneLineTwo', 'cast.stillnessSetOneLineThree'],
+  ['cast.stillnessSetTwoLineOne', 'cast.stillnessSetTwoLineTwo', 'cast.stillnessSetTwoLineThree'],
+  ['cast.stillnessSetThreeLineOne', 'cast.stillnessSetThreeLineTwo', 'cast.stillnessSetThreeLineThree'],
 ];
-const TOUCH_HINTS = [
-  '平心静气，轻触第 {n} 次',
-  '心念不散，轻触第 {n} 次',
-  '只守此问，落下第 {n} 爻',
-  '顺其自然，轻触第 {n} 次',
-  '意到即可，轻触第 {n} 次',
-  '慢慢来，完成第 {n} 次',
-  '念定于此，轻触第 {n} 次',
-  '以诚相问，轻触第 {n} 次',
+const TOUCH_HINT_KEYS: TranslationKey[] = [
+  'cast.touchHintOne',
+  'cast.touchHintTwo',
+  'cast.touchHintThree',
+  'cast.touchHintFour',
 ];
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Cast'>;
@@ -51,11 +44,11 @@ function isYangLine(strength: number) {
   return strength === 7 || strength === 9;
 }
 
-function lineLabel(strength: number) {
-  if (strength === 6) return '老阴';
-  if (strength === 7) return '少阳';
-  if (strength === 8) return '少阴';
-  return '老阳';
+function lineLabelKey(strength: number): TranslationKey {
+  if (strength === 6) return 'cast.oldYin';
+  if (strength === 7) return 'cast.youngYang';
+  if (strength === 8) return 'cast.youngYin';
+  return 'cast.oldYang';
 }
 
 function pickRandomItem<T>(items: T[]) {
@@ -67,7 +60,8 @@ function splitHintTemplate(template: string) {
   return { prefix, suffix };
 }
 
-function CastLine({ strength, progress }: { strength: number; progress: Animated.Value }) {
+function CastLine({ strength, progress, color }: { strength: number; progress: Animated.Value; color: string }) {
+  const { t } = useAppLanguage();
   const isOldLine = strength === 6 || strength === 9;
   const opacity = progress.interpolate({
     inputRange: [0, 0.45, 1],
@@ -87,26 +81,30 @@ function CastLine({ strength, progress }: { strength: number; progress: Animated
   const lineColor = isOldLine
     ? progress.interpolate({
       inputRange: [0, 0.2, 0.76, 1],
-      outputRange: ['#d8a72f', '#d8a72f', '#d8a72f', '#000'],
+      outputRange: ['#d8a72f', '#d8a72f', '#d8a72f', color],
       extrapolate: 'clamp',
     })
-    : '#000';
+    : color;
   const yang = isYangLine(strength);
 
   return (
     <Animated.View style={[styles.lineRow, { opacity, transform: [{ translateY }] }]}>
-      <Animated.View style={[styles.lineShape, { transform: [{ scaleX }] }]}>
-        {yang ? (
-          <Animated.View style={[styles.yangLine, { backgroundColor: lineColor }]} />
-        ) : (
-          <View style={styles.yinLineWrap}>
-            <Animated.View style={[styles.yinLineSegment, { backgroundColor: lineColor }]} />
-            <View style={styles.yinLineGap} />
-            <Animated.View style={[styles.yinLineSegment, { backgroundColor: lineColor }]} />
-          </View>
-        )}
-      </Animated.View>
-      <Text style={styles.lineLabel}>{lineLabel(strength)}</Text>
+      <View style={styles.lineShapeColumn}>
+        <Animated.View style={[styles.lineShape, { transform: [{ scaleX }] }]}>
+          {yang ? (
+            <Animated.View style={[styles.yangLine, { backgroundColor: lineColor }]} />
+          ) : (
+            <View style={styles.yinLineWrap}>
+              <Animated.View style={[styles.yinLineSegment, { backgroundColor: lineColor }]} />
+              <View style={styles.yinLineGap} />
+              <Animated.View style={[styles.yinLineSegment, { backgroundColor: lineColor }]} />
+            </View>
+          )}
+        </Animated.View>
+      </View>
+      <View style={styles.lineLabelColumn}>
+        <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7} style={[styles.lineLabel, { color }]}>{t(lineLabelKey(strength))}</Text>
+      </View>
     </Animated.View>
   );
 }
@@ -140,7 +138,9 @@ function TouchRippleView({ ripple }: { ripple: TouchRipple }) {
 }
 
 export function CastScreen({ navigation, route }: Props) {
-  const { question } = route.params;
+  const { colors } = useAppTheme();
+  const { t } = useAppLanguage();
+  const { question, profile } = route.params;
   const trimmedQuestion = question.trim().toLowerCase();
   const forceStaticHexagram = trimmedQuestion === 'wbg';
   const testSpecialStatus = trimmedQuestion === 'yp' ? '月破' : trimmedQuestion === 'ad' ? '暗动' : undefined;
@@ -160,8 +160,10 @@ export function CastScreen({ navigation, route }: Props) {
   const touchHintOpacity = useRef(new Animated.Value(1)).current;
   const completeHintOpacity = useRef(new Animated.Value(0)).current;
   const lineProgress = useRef(Array.from({ length: 6 }, () => new Animated.Value(0))).current;
-  const stillnessLines = useMemo(() => pickRandomItem(STILLNESS_LINE_POOLS), []);
-  const hintTemplate = useMemo(() => pickRandomItem(TOUCH_HINTS), []);
+  const stillnessLineKeys = useMemo(() => pickRandomItem(STILLNESS_LINE_POOL_KEYS), []);
+  const hintTemplateKey = useMemo(() => pickRandomItem(TOUCH_HINT_KEYS), []);
+  const stillnessLines = useMemo(() => stillnessLineKeys.map((key) => t(key)), [stillnessLineKeys, t]);
+  const hintTemplate = t(hintTemplateKey);
 
   const canTouch = step < 6 && !isCompleting.current;
   const hintParts = useMemo(() => splitHintTemplate(hintTemplate), [hintTemplate]);
@@ -224,10 +226,11 @@ export function CastScreen({ navigation, route }: Props) {
           id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
           question,
           createdAt: castAt.toISOString(),
+          profile,
           hexagram,
           lunarInfo,
           analysis,
-          aiReading: `AI 解读占位：\n问题：${question}\n卦名：${hexagram.name}\n\n后续可接入大模型接口，将此处替换为正式解卦结果。`,
+          aiReading: 'AI reading placeholder.',
         },
       });
     }, 680);
@@ -302,7 +305,7 @@ export function CastScreen({ navigation, route }: Props) {
   };
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={[styles.container, { backgroundColor: colors.card }]}>
       <Pressable ref={touchLayerRef} collapsable={false} style={styles.touchLayer} onPressIn={startTouchFeedback} onPress={throwCoins}>
         <View pointerEvents="none" style={styles.touchRippleLayer}>
           {touchRipples.map((ripple) => <TouchRippleView key={ripple.id} ripple={ripple} />)}
@@ -321,7 +324,7 @@ export function CastScreen({ navigation, route }: Props) {
               extrapolate: 'clamp',
             });
             return (
-              <Animated.Text key={line} style={[styles.stillnessText, { opacity, transform: [{ translateY }] }]}>
+              <Animated.Text key={line} style={[styles.stillnessText, { color: colors.text, opacity, transform: [{ translateY }] }]}>
                 {line}
               </Animated.Text>
             );
@@ -350,8 +353,8 @@ export function CastScreen({ navigation, route }: Props) {
             },
           ]}
         >
-          {COIN_LABELS.map((label, index) => (
-            <View key={label} style={styles.coinSlot}>
+          {COIN_LABEL_KEYS.map((labelKey, index) => (
+            <View key={labelKey} style={styles.coinSlot}>
               <FortuneCoin value={currentCoins[index]} index={index} flipSeed={flipSeed} />
             </View>
           ))}
@@ -364,7 +367,7 @@ export function CastScreen({ navigation, route }: Props) {
               const strength = lineStrengths[lineIndex];
               return (
                 <View key={lineIndex} style={styles.lineSlot}>
-                  {strength ? <CastLine strength={strength} progress={lineProgress[lineIndex]} /> : null}
+                  {strength ? <CastLine strength={strength} progress={lineProgress[lineIndex]} color={colors.text} /> : null}
                 </View>
               );
             })}
@@ -387,12 +390,12 @@ export function CastScreen({ navigation, route }: Props) {
           >
             <View style={styles.hintLineStack}>
               <Animated.View style={[styles.hintLine, { opacity: touchHintOpacity }]}>
-                <Text style={styles.hintText}>{hintParts.prefix}</Text>
-                <Text style={styles.hintText}>{hintValue}</Text>
-                <Text style={styles.hintText}>{hintParts.suffix}</Text>
+                <Text style={[styles.hintText, { color: colors.text }]}>{hintParts.prefix}</Text>
+                <Text style={[styles.hintText, { color: colors.text }]}>{hintValue}</Text>
+                <Text style={[styles.hintText, { color: colors.text }]}>{hintParts.suffix}</Text>
               </Animated.View>
               <Animated.View style={[styles.hintLine, styles.completeHintLine, { opacity: completeHintOpacity }]}>
-                <Text style={styles.hintText}>卦象已成，片刻入卦</Text>
+                <Text style={[styles.hintText, { color: colors.text }]}>{t('cast.completeHint')}</Text>
               </Animated.View>
             </View>
           </Animated.View>
@@ -421,14 +424,16 @@ const styles = StyleSheet.create({
   coinSlot: { width: 92, alignItems: 'center' },
   castArea: { position: 'absolute', top: '54%', alignItems: 'center' },
   hexagramStack: { height: 178, justifyContent: 'flex-end', gap: 8, marginBottom: 16 },
-  lineSlot: { width: 244, height: 22, alignItems: 'center', justifyContent: 'center' },
-  lineRow: { width: 244, height: 22, alignItems: 'center', justifyContent: 'center' },
+  lineSlot: { width: 286, height: 22, alignItems: 'center', justifyContent: 'center' },
+  lineRow: { width: 286, height: 22, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-start', paddingLeft: 58 },
+  lineShapeColumn: { width: 170, alignItems: 'center', justifyContent: 'center' },
+  lineLabelColumn: { width: 58, alignItems: 'flex-start', justifyContent: 'center', paddingLeft: 10 },
   lineShape: { width: 170, height: 12, alignItems: 'center', justifyContent: 'center' },
   yangLine: { width: 170, height: 10, borderRadius: 2, backgroundColor: '#000' },
   yinLineWrap: { width: 170, height: 10, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   yinLineSegment: { width: 76, height: 10, borderRadius: 2, backgroundColor: '#000' },
   yinLineGap: { width: 18 },
-  lineLabel: { position: 'absolute', right: 0, color: '#777', fontSize: 11, fontWeight: '700' },
+  lineLabel: { color: '#777', fontSize: 11, fontWeight: '700' },
   hintWrap: { alignItems: 'center', gap: 7, marginTop: 72 },
   hintLineStack: { minWidth: 220, height: 20, alignItems: 'center', justifyContent: 'center' },
   hintLine: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center' },

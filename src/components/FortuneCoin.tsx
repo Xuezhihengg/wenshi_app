@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Animated, StyleSheet, Text, View } from 'react-native';
+import { useAppTheme } from '../theme/AppTheme';
 
 type Props = {
   value?: 2 | 3;
@@ -8,6 +9,7 @@ type Props = {
 };
 
 export function FortuneCoin({ value, index, flipSeed }: Props) {
+  const { colors } = useAppTheme();
   const rotation = useRef(new Animated.Value(0)).current;
   const lift = useRef(new Animated.Value(0)).current;
   const labelOpacity = useRef(new Animated.Value(1)).current;
@@ -143,7 +145,7 @@ export function FortuneCoin({ value, index, flipSeed }: Props) {
           style={[
             styles.faceText,
             displayValue === 2 ? styles.faceTextBack : null,
-            { opacity: labelOpacity },
+            { color: displayValue === 2 ? colors.mutedText : colors.text, opacity: labelOpacity },
           ]}
         >
           {displayText}

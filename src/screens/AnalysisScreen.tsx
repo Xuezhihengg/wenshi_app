@@ -1,18 +1,24 @@
 import { LinearGradient } from 'expo-linear-gradient';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
+import { FontAwesome } from '@expo/vector-icons';
+import * as Haptics from 'expo-haptics';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Animated, Easing, Keyboard, LayoutAnimation, Modal, PanResponder, Pressable, ScrollView, Share, StyleSheet, Text, TextInput, UIManager, View, useWindowDimensions, type GestureResponderEvent } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { LineIcon } from '../components/LineIcon';
 import { hexagramTextFor, type HexagramTextSection } from '../domain/hexagramTexts';
 import { HexagramLine, SpiritAnalysis, YinYang } from '../domain/types';
 import { RootStackParamList } from '../navigation/types';
 import { saveRecord } from '../storage/recordStore';
+import { useAppTheme } from '../theme/AppTheme';
+import { TranslationKey, useAppLanguage } from '../i18n/AppLanguage';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Analysis'>;
 type MetaMode = 'sixKin' | 'sixSpirit';
 type SpiritRippleItem = { id: number; lineIndex: number; isHidden: boolean; progress: Animated.Value };
 type VerificationNote = { id: number; fulfilled: boolean; note: string; createdAt: string };
 const META_COLUMN_WIDTH = 54;
+const META_COLUMN_WIDTH_EN = 74;
 
 const ELEMENT_COLORS: Record<string, string> = {
   木: '#1f7a3f',
@@ -30,6 +36,14 @@ const ELEMENT_LIGHT_COLORS: Record<string, string> = {
   水: '#d9e9f5',
 };
 
+const ELEMENT_DARK_CARD_COLORS: Record<string, string> = {
+  木: '#11291d',
+  火: '#321916',
+  土: '#302512',
+  金: '#29292d',
+  水: '#102334',
+};
+
 const SPIRIT_ELEMENTS: Record<string, string> = {
   青龙: '木',
   朱雀: '火',
@@ -39,16 +53,16 @@ const SPIRIT_ELEMENTS: Record<string, string> = {
   玄武: '水',
 };
 
-const MODE_LABELS: Record<MetaMode, string> = {
-  sixKin: '六亲',
-  sixSpirit: '六神',
+const MODE_LABEL_KEYS: Record<MetaMode, TranslationKey> = {
+  sixKin: 'analysis.sixKin',
+  sixSpirit: 'analysis.sixSpirit',
 };
 
-const TEXT_SECTION_LABELS: Record<HexagramTextSection, string> = {
-  judgment: '卦辞',
-  tuan: '彖辞',
-  image: '象辞',
-  lines: '爻辞',
+const TEXT_SECTION_LABEL_KEYS: Record<HexagramTextSection, TranslationKey> = {
+  judgment: 'analysis.judgment',
+  tuan: 'analysis.tuan',
+  image: 'analysis.image',
+  lines: 'analysis.lineText',
 };
 
 const TEXT_SECTIONS: HexagramTextSection[] = ['judgment', 'tuan', 'image', 'lines'];
@@ -59,8 +73,113 @@ function formatCompactChineseDateTime(value: string | Date) {
   return `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日 ${date.getHours()}时`;
 }
 
+function formatCompactDateTime(value: string | Date, language: 'zh' | 'en') {
+  if (language === 'zh') return formatCompactChineseDateTime(value);
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleString('en-US', {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
+}
+
 function formatStemBranchDateTime(lunarInfo: Props['route']['params']['record']['lunarInfo']) {
   return `${lunarInfo.yearStemBranch}年 ${lunarInfo.monthStemBranch}月 ${lunarInfo.dayStemBranch}日${lunarInfo.timeStemBranch ? ` ${lunarInfo.timeStemBranch}时` : ''}`;
+}
+
+function formatStemBranchDateTimeLocalized(lunarInfo: Props['route']['params']['record']['lunarInfo'], language: 'zh' | 'en') {
+  if (language === 'zh') return formatStemBranchDateTime(lunarInfo);
+  return [
+    lunarInfo.yearStemBranch,
+    lunarInfo.monthStemBranch,
+    lunarInfo.dayStemBranch,
+    lunarInfo.timeStemBranch,
+  ].filter(Boolean).join(' · ');
+}
+
+const SIX_KIN_EN: Record<string, string> = {
+  兄弟: 'Sibling',
+  子孙: 'Offspring',
+  妻财: 'Wealth',
+  官鬼: 'Ghost',
+  父母: 'Parent',
+};
+
+const SIX_SPIRIT_EN: Record<string, string> = {
+  青龙: 'Azure Dragon',
+  朱雀: 'Vermilion Bird',
+  勾陈: 'Gou Chen',
+  腾蛇: 'Soaring Snake',
+  白虎: 'White Tiger',
+  玄武: 'Black Tortoise',
+};
+
+const ELEMENT_EN: Record<string, string> = {
+  木: 'Wood',
+  火: 'Fire',
+  土: 'Earth',
+  金: 'Metal',
+  水: 'Water',
+};
+
+const STATUS_EN: Record<string, string> = {
+  旺: 'Prosperous',
+  相: 'Ministerial',
+  休: 'Resting',
+  囚: 'Imprisoned',
+  死: 'Dead',
+  月破: 'Month Break',
+  暗动: 'Hidden Motion',
+  旬空: 'Void',
+};
+
+const SPIRIT_TITLE_EN: Record<string, string> = {
+  用神: 'Use God',
+  原神: 'Source God',
+  忌神: 'Adverse God',
+  仇神: 'Hostile God',
+};
+
+const LINE_POSITION_EN: Record<string, string> = {
+  初爻: 'First line',
+  二爻: 'Second line',
+  三爻: 'Third line',
+  四爻: 'Fourth line',
+  五爻: 'Fifth line',
+  上爻: 'Top line',
+};
+
+function translateChineseTerms(text: string | undefined, language: 'zh' | 'en') {
+  if (!text || language === 'zh') return text ?? '';
+  let result = text;
+  Object.entries({
+    ...SIX_SPIRIT_EN,
+    ...SIX_KIN_EN,
+    ...SPIRIT_TITLE_EN,
+    ...LINE_POSITION_EN,
+    世爻: 'World line',
+    应爻: 'Response line',
+    世: 'World',
+    应: 'Response',
+    伏: 'hidden',
+    月破: 'Month Break',
+    暗动: 'Hidden Motion',
+    旬空: 'Void',
+    三合: 'Three-Harmony',
+    六合: 'Six-Combination',
+    六冲: 'Six-Clash',
+    归魂: 'Returning Soul',
+    游魂: 'Wandering Soul',
+    变: 'changes to',
+    爻: 'line',
+  }).forEach(([source, target]) => {
+    result = result.split(source).join(target);
+  });
+  return result;
 }
 
 const STATUS_COLORS: Record<string, { background: string; text: string }> = {
@@ -98,18 +217,18 @@ function nextMode(mode: MetaMode): MetaMode {
   return 'sixKin';
 }
 
-function roleText(line: HexagramLine) {
-  if (line.role === 'world') return '世';
-  if (line.role === 'response') return '应';
+function roleText(line: HexagramLine, language: 'zh' | 'en') {
+  if (line.role === 'world') return language === 'en' ? 'W' : '世';
+  if (line.role === 'response') return language === 'en' ? 'R' : '应';
   return '';
 }
 
-function roleLabels(line: HexagramLine, spiritAnalyses: SpiritAnalysis[]) {
+function roleLabels(line: HexagramLine, spiritAnalyses: SpiritAnalysis[], language: 'zh' | 'en') {
   return [
-    roleText(line),
+    roleText(line, language),
     ...spiritAnalyses
       .filter((analysis) => analysis.lineIndex === line.index && !analysis.isHidden)
-      .map((analysis) => spiritShortLabel(analysis.title)),
+      .map((analysis) => spiritShortLabel(analysis.title, language)),
   ].filter(Boolean);
 }
 
@@ -122,8 +241,9 @@ function spiritAnalysisColor(analysis: SpiritAnalysis | undefined, fallback: str
   return ELEMENT_COLORS[analysis.color] ?? fallback;
 }
 
-function spiritAnalysisBackground(analysis: SpiritAnalysis | undefined) {
-  if (!analysis?.color) return '#f2f2f2';
+function spiritAnalysisBackground(analysis: SpiritAnalysis | undefined, darkMode = false) {
+  if (!analysis?.color) return darkMode ? '#202024' : '#f2f2f2';
+  if (darkMode) return ELEMENT_DARK_CARD_COLORS[analysis.color] ?? '#202024';
   return ELEMENT_LIGHT_COLORS[analysis.color] ?? '#f2f2f2';
 }
 
@@ -132,7 +252,13 @@ function spiritLineColor(lineIndex: number, isHidden: boolean, spiritAnalyses: S
   return analysis?.color ? ELEMENT_COLORS[analysis.color] : undefined;
 }
 
-function spiritShortLabel(title: SpiritAnalysis['title']) {
+function spiritShortLabel(title: SpiritAnalysis['title'], language: 'zh' | 'en') {
+  if (language === 'en') {
+    if (title === '用神') return 'U';
+    if (title === '原神') return 'S';
+    if (title === '忌神') return 'A';
+    return 'H';
+  }
   return title.slice(0, 1);
 }
 
@@ -159,11 +285,15 @@ function stemBranchColor(stemBranch: string) {
   return ELEMENT_COLORS[branchElements[branch]] ?? '#000';
 }
 
-function metaTextForMode(line: HexagramLine, mode: MetaMode) {
+function metaTextForMode(line: HexagramLine, mode: MetaMode, language: 'zh' | 'en') {
   if (mode === 'sixSpirit') {
-    return { primary: line.sixSpirit, secondary: '', color: spiritColor(line) };
+    return { primary: language === 'en' ? SIX_SPIRIT_EN[line.sixSpirit] ?? line.sixSpirit : line.sixSpirit, secondary: '', color: spiritColor(line) };
   }
-  return { primary: line.sixKin, secondary: `${line.branchElement} · ${line.stemBranch}`, color: lineColor(line) };
+  return {
+    primary: language === 'en' ? SIX_KIN_EN[line.sixKin] ?? line.sixKin : line.sixKin,
+    secondary: `${language === 'en' ? ELEMENT_EN[line.branchElement ?? ''] ?? line.branchElement : line.branchElement} · ${line.stemBranch}`,
+    color: lineColor(line),
+  };
 }
 
 type FullTextBlock = {
@@ -172,9 +302,12 @@ type FullTextBlock = {
   translation?: string;
 };
 
-function plainMeaning(original: string, section: HexagramTextSection) {
-  if (!original) return '暂无释义。';
-  const prefix = TEXT_SECTION_LABELS[section];
+function plainMeaning(original: string, section: HexagramTextSection, t: (key: TranslationKey) => string, language: 'zh' | 'en') {
+  if (!original) return t('analysis.noContentBody');
+  const prefix = t(TEXT_SECTION_LABEL_KEYS[section]);
+  if (language === 'en') {
+    return `${prefix}: this passage gives the core meaning of the hexagram in this section. Read it together with the question, World/Response, Use God, moving lines, and the strength granted or denied by the month and day officers. Favorable signs show usable openings; unfavorable signs show what must be guarded against.`;
+  }
   return `${prefix}提示：这段文字说明本卦在当前部分的核心含义。宜结合所问之事、世应、用神、动爻以及日月旺衰综合判断；吉处看其可用之机，凶处看其所警之失。`;
 }
 
@@ -186,39 +319,39 @@ function splitYaoLines(text: ReturnType<typeof hexagramTextFor>) {
   return text?.lines.split('\n').filter(Boolean) ?? [];
 }
 
-function fullTextBlocks(text: ReturnType<typeof hexagramTextFor>, section: HexagramTextSection): FullTextBlock[] {
-  if (!text) return [{ title: '暂无内容', original: '暂无内容。' }];
+function fullTextBlocks(text: ReturnType<typeof hexagramTextFor>, section: HexagramTextSection, t: (key: TranslationKey) => string, language: 'zh' | 'en'): FullTextBlock[] {
+  if (!text) return [{ title: t('analysis.noContent'), original: t('analysis.noContentBody') }];
   if (section === 'judgment' || section === 'tuan') {
-    const original = text[section] || '暂无内容。';
+    const original = text[section] || t('analysis.noContentBody');
     return [
-      { title: '原文', original },
-      { title: '白话释义', original: plainMeaning(original, section) },
+      { title: t('analysis.original'), original },
+      { title: t('analysis.plainMeaning'), original: plainMeaning(original, section, t, language) },
     ];
   }
   if (section === 'image') {
     const yaoTitles = splitYaoLines(text).map((line) => line.split('：')[0]).filter(Boolean);
     return splitImageLines(text).map((original, index) => ({
-      title: index === 0 ? '大象' : yaoTitles[index - 1] ?? `第 ${index} 爻`,
+      title: index === 0 ? (language === 'en' ? 'Great Image' : '大象') : yaoTitles[index - 1] ?? (language === 'en' ? `Line ${index}` : `第 ${index} 爻`),
       original,
-      translation: plainMeaning(original, section),
+      translation: plainMeaning(original, section, t, language),
     }));
   }
   return splitYaoLines(text).map((original, index) => ({
-    title: original.split('：')[0] || `第 ${index + 1} 爻`,
+    title: original.split('：')[0] || (language === 'en' ? `Line ${index + 1}` : `第 ${index + 1} 爻`),
     original,
-    translation: plainMeaning(original, section),
+    translation: plainMeaning(original, section, t, language),
   }));
 }
 
-function hiddenSpiritMetaForMode(line: HexagramLine, mode: MetaMode) {
+function hiddenSpiritMetaForMode(line: HexagramLine, mode: MetaMode, language: 'zh' | 'en') {
   const hiddenSpirit = line.hiddenSpirit;
   if (!hiddenSpirit) return undefined;
   if (mode === 'sixSpirit') {
-    return { primary: line.sixSpirit, secondary: '', color: spiritColor(line) };
+    return { primary: language === 'en' ? SIX_SPIRIT_EN[line.sixSpirit] ?? line.sixSpirit : line.sixSpirit, secondary: '', color: spiritColor(line) };
   }
   return {
-    primary: `${hiddenSpirit.sixKin}﹙伏﹚`,
-    secondary: `${hiddenSpirit.branchElement} · ${hiddenSpirit.stemBranch}`,
+    primary: language === 'en' ? SIX_KIN_EN[hiddenSpirit.sixKin] ?? hiddenSpirit.sixKin : `${hiddenSpirit.sixKin}﹙伏﹚`,
+    secondary: `${language === 'en' ? ELEMENT_EN[hiddenSpirit.branchElement] ?? hiddenSpirit.branchElement : hiddenSpirit.branchElement} · ${hiddenSpirit.stemBranch}`,
     color: ELEMENT_COLORS[hiddenSpirit.branchElement] ?? '#333',
   };
 }
@@ -230,11 +363,13 @@ function MetaDisplayLayer({
   primaryStyle,
   secondaryStyle,
   fitText = false,
+  width,
 }: {
   meta: MetaDisplay | undefined;
   primaryStyle?: object;
   secondaryStyle?: object;
   fitText?: boolean;
+  width?: number;
 }) {
   if (!meta) return null;
   return (
@@ -243,7 +378,7 @@ function MetaDisplayLayer({
         numberOfLines={fitText ? 1 : undefined}
         adjustsFontSizeToFit={fitText}
         minimumFontScale={0.72}
-        style={[styles.metaPrimary, primaryStyle, { color: meta.color }]}
+        style={[styles.metaPrimary, width ? { width } : null, primaryStyle, { color: meta.color }]}
       >
         {meta.primary}
       </Text>
@@ -252,7 +387,7 @@ function MetaDisplayLayer({
           numberOfLines={fitText ? 1 : undefined}
           adjustsFontSizeToFit={fitText}
           minimumFontScale={0.8}
-          style={[styles.metaSecondary, secondaryStyle, { color: meta.color }]}
+          style={[styles.metaSecondary, width ? { width } : null, secondaryStyle, { color: meta.color }]}
         >
           {meta.secondary}
         </Text>
@@ -268,6 +403,7 @@ function MetaDisplaySwitcher({
   primaryStyle,
   secondaryStyle,
   fitText,
+  width,
 }: {
   meta: MetaDisplay | undefined;
   opacity: Animated.Value | Animated.AnimatedMultiplication<number>;
@@ -275,10 +411,11 @@ function MetaDisplaySwitcher({
   primaryStyle?: object;
   secondaryStyle?: object;
   fitText?: boolean;
+  width?: number;
 }) {
   return (
-    <Animated.View style={[styles.metaContent, { opacity, transform: [{ translateX }] }]}>
-      <MetaDisplayLayer meta={meta} primaryStyle={primaryStyle} secondaryStyle={secondaryStyle} fitText={fitText} />
+    <Animated.View style={[styles.metaContent, width ? { width } : null, { opacity, transform: [{ translateX }] }]}>
+      <MetaDisplayLayer meta={meta} primaryStyle={primaryStyle} secondaryStyle={secondaryStyle} fitText={fitText} width={width} />
     </Animated.View>
   );
 }
@@ -289,17 +426,19 @@ function hasEffectiveHiddenSpirit(line: HexagramLine) {
 }
 
 function HexagramMarkTags({ marks }: { marks?: string[] }) {
+  const { colors } = useAppTheme();
   if (!marks?.length) return null;
   return (
     <View style={styles.hexMarkRow}>
       {marks.map((mark) => (
-        <Text key={mark} style={styles.hexMarkText}>{mark}</Text>
+        <Text key={mark} style={[styles.hexMarkText, { color: colors.text }]}>{mark}</Text>
       ))}
     </View>
   );
 }
 
-function AnalysisPageTabs({ scrollX, pageWidth }: { scrollX: Animated.Value; pageWidth: number }) {
+function AnalysisPageTabs({ scrollX, pageWidth, onSelect }: { scrollX: Animated.Value; pageWidth: number; onSelect: (index: number) => void }) {
+  const { t } = useAppLanguage();
   const pillTranslateX = scrollX.interpolate({
     inputRange: [0, pageWidth * 0.5, pageWidth, pageWidth * 1.5, pageWidth * 2],
     outputRange: [0, 28, 56, 84, 112],
@@ -339,19 +478,33 @@ function AnalysisPageTabs({ scrollX, pageWidth }: { scrollX: Animated.Value; pag
   return (
     <View style={styles.analysisTabs}>
       <View style={styles.analysisTabsInner}>
-        <Animated.View style={[styles.analysisTabPill, { transform: [{ translateX: pillTranslateX }] }]} />
-        <View style={styles.analysisTabSlot}>
-          <Animated.Text style={[styles.analysisTabText, { opacity: firstTitleOpacity }]}>四神</Animated.Text>
-          <Animated.View style={[styles.analysisTabDot, { opacity: firstDotOpacity }]} />
-        </View>
-        <View style={styles.analysisTabSlot}>
-          <Animated.View style={[styles.analysisTabDot, { opacity: secondDotOpacity }]} />
-          <Animated.Text style={[styles.analysisTabText, { opacity: secondTitleOpacity }]}>合局</Animated.Text>
-        </View>
-        <View style={styles.analysisTabSlot}>
-          <Animated.View style={[styles.analysisTabDot, { opacity: thirdDotOpacity }]} />
-          <Animated.Text style={[styles.analysisTabText, { opacity: thirdTitleOpacity }]}>验事</Animated.Text>
-        </View>
+        <Animated.View style={[styles.analysisTabPillShadow, { transform: [{ translateX: pillTranslateX }] }]}>
+          <View style={styles.analysisTabPill} />
+        </Animated.View>
+        <Pressable style={styles.analysisTabSlot} onPress={() => onSelect(0)}>
+          <Animated.View pointerEvents="none" style={[styles.analysisTabLayer, { opacity: firstTitleOpacity }]}>
+            <Text style={styles.analysisTabText}>{t('analysis.tabSpirits')}</Text>
+          </Animated.View>
+          <Animated.View pointerEvents="none" style={[styles.analysisTabLayer, { opacity: firstDotOpacity }]}>
+            <View style={styles.analysisTabDot} />
+          </Animated.View>
+        </Pressable>
+        <Pressable style={styles.analysisTabSlot} onPress={() => onSelect(1)}>
+          <Animated.View pointerEvents="none" style={[styles.analysisTabLayer, { opacity: secondDotOpacity }]}>
+            <View style={styles.analysisTabDot} />
+          </Animated.View>
+          <Animated.View pointerEvents="none" style={[styles.analysisTabLayer, { opacity: secondTitleOpacity }]}>
+            <Text style={styles.analysisTabText}>{t('analysis.tabUnions')}</Text>
+          </Animated.View>
+        </Pressable>
+        <Pressable style={styles.analysisTabSlot} onPress={() => onSelect(2)}>
+          <Animated.View pointerEvents="none" style={[styles.analysisTabLayer, { opacity: thirdDotOpacity }]}>
+            <View style={styles.analysisTabDot} />
+          </Animated.View>
+          <Animated.View pointerEvents="none" style={[styles.analysisTabLayer, { opacity: thirdTitleOpacity }]}>
+            <Text style={styles.analysisTabText}>{t('analysis.tabVerify')}</Text>
+          </Animated.View>
+        </Pressable>
       </View>
     </View>
   );
@@ -366,6 +519,7 @@ function FullTextPageTabs({
   pageWidth: number;
   onSelect: (index: number) => void;
 }) {
+  const { t } = useAppLanguage();
   const slotWidth = 52;
   const pillInputRange = TEXT_SECTIONS.flatMap((_, index) => {
     if (index === TEXT_SECTIONS.length - 1) return [pageWidth * index];
@@ -400,10 +554,10 @@ function FullTextPageTabs({
           return (
             <Pressable key={section} style={[styles.fullTextTabSlot, { width: slotWidth }]} onPress={() => onSelect(index)}>
               <Animated.Text style={[styles.fullTextTabText, { opacity: titleOpacity }]}>
-                {TEXT_SECTION_LABELS[section]}
+                {t(TEXT_SECTION_LABEL_KEYS[section])}
               </Animated.Text>
               <Animated.Text style={[styles.fullTextTabTextInactive, { opacity: inactiveOpacity }]}>
-                {TEXT_SECTION_LABELS[section]}
+                {t(TEXT_SECTION_LABEL_KEYS[section])}
               </Animated.Text>
             </Pressable>
           );
@@ -424,9 +578,11 @@ function SpiritAnalysisBlock({
   onTitlePress: (analysis: SpiritAnalysis, event: GestureResponderEvent) => void;
   onCardPress: (analysis: SpiritAnalysis) => void;
 }) {
+  const { darkMode, colors } = useAppTheme();
+  const { language } = useAppLanguage();
   const color = spiritAnalysisColor(analysis, fallbackColor);
   return (
-    <Pressable style={[styles.spiritAnalysisCard, { backgroundColor: spiritAnalysisBackground(analysis) }]} onPress={() => onCardPress(analysis)}>
+    <Pressable style={[styles.spiritAnalysisCard, { backgroundColor: spiritAnalysisBackground(analysis, darkMode) }]} onPress={() => onCardPress(analysis)}>
       <View style={styles.useGodRow}>
         <Pressable
           style={styles.spiritTitleLeft}
@@ -436,21 +592,30 @@ function SpiritAnalysisBlock({
           }}
           hitSlop={6}
         >
-            <Text style={styles.summaryTitle}>{analysis.title}</Text>
-            <Text style={[styles.useGodValue, { color }]}>{analysis.displayName}</Text>
+            <Text style={[styles.summaryTitle, { color: colors.text }]}>{translateChineseTerms(analysis.title, language)}</Text>
+            <Text style={[styles.useGodValue, { color }]}>{translateChineseTerms(analysis.displayName, language)}</Text>
         </Pressable>
-        {analysis.positionName ? <Text style={styles.spiritPositionText}>{analysis.positionName}</Text> : null}
+        {analysis.positionName ? <Text style={[styles.spiritPositionText, { color: colors.text }]}>{translateChineseTerms(analysis.positionName, language)}</Text> : null}
       </View>
-      <Text style={styles.summaryText}>{analysis.detail}</Text>
+      <Text style={[styles.summaryText, { color: colors.mutedText }]}>{translateChineseTerms(analysis.detail, language)}</Text>
     </Pressable>
   );
 }
 
 function ResultInfoRow({ label, value }: { label: string; value: string }) {
+  const { colors } = useAppTheme();
+  const { language } = useAppLanguage();
   return (
     <View style={styles.resultInfoRow}>
-      <Text style={styles.resultInfoLabel}>{label}</Text>
-      <Text style={styles.resultInfoValue}>{value}</Text>
+      <Text
+        numberOfLines={1}
+        adjustsFontSizeToFit
+        minimumFontScale={0.72}
+        style={[styles.resultInfoLabel, language === 'en' ? styles.resultInfoLabelWide : null, { color: colors.mutedText }]}
+      >
+        {label}
+      </Text>
+      <Text style={[styles.resultInfoValue, { color: colors.text }]}>{value}</Text>
     </View>
   );
 }
@@ -463,6 +628,7 @@ function VerificationNoteCard({
   onDelete,
   onFocus,
   keyboardLift,
+  language,
   onMeasured,
 }: {
   note: VerificationNote;
@@ -473,7 +639,10 @@ function VerificationNoteCard({
   onFocus: () => void;
   keyboardLift: Animated.Value;
   onMeasured?: (height: number) => void;
+  language: 'zh' | 'en';
 }) {
+  const { darkMode, colors } = useAppTheme();
+  const { t } = useAppLanguage();
   const mountProgress = useRef(new Animated.Value(0)).current;
   const switchProgress = useRef(new Animated.Value(note.fulfilled ? 1 : 0)).current;
   const deleteProgress = useRef(new Animated.Value(deleteArmed ? 1 : 0)).current;
@@ -539,12 +708,24 @@ function VerificationNoteCard({
       onLayout={(event) => onMeasured?.(event.nativeEvent.layout.height)}
       style={[styles.resultNoteCard, { opacity, transform: [{ translateY: keyboardLift }] }]}
     >
-      <Animated.View pointerEvents="none" style={[styles.resultNoteBackground, styles.resultNoteUnfulfilledBackground, { opacity: unfulfilledOpacity }]} />
-      <Animated.View pointerEvents="none" style={[styles.resultNoteBackground, styles.resultNoteFulfilledBackground, { opacity: fulfilledOpacity }]} />
+      <Animated.View
+        pointerEvents="none"
+        style={[
+          styles.resultNoteBackground,
+          { backgroundColor: darkMode ? '#321916' : '#f4ddd7', opacity: unfulfilledOpacity },
+        ]}
+      />
+      <Animated.View
+        pointerEvents="none"
+        style={[
+          styles.resultNoteBackground,
+          { backgroundColor: darkMode ? '#11291d' : '#dceee1', opacity: fulfilledOpacity },
+        ]}
+      />
       <View style={styles.resultNoteHeader}>
         <View>
-          <Text style={styles.unionTitle}>批注</Text>
-          <Text style={styles.resultNoteTime}>{formatCompactChineseDateTime(note.createdAt)}</Text>
+          <Text style={[styles.unionTitle, { color: colors.text }]}>{t('analysis.note')}</Text>
+          <Text style={[styles.resultNoteTime, { color: colors.faintText }]}>{formatCompactDateTime(note.createdAt, language)}</Text>
         </View>
         <Pressable style={styles.deleteIconButton} onPress={handleDeletePress}>
           <Animated.View
@@ -557,16 +738,20 @@ function VerificationNoteCard({
               },
             ]}
           />
-          <Animated.Text pointerEvents="none" style={[styles.deleteIconText, { opacity: deleteBlackOpacity }]}>×</Animated.Text>
+          <Animated.Text pointerEvents="none" style={[styles.deleteIconText, { color: colors.text, opacity: deleteBlackOpacity }]}>×</Animated.Text>
           <Animated.Text pointerEvents="none" style={[styles.deleteIconText, styles.deleteIconTextArmed, styles.deleteIconOverlayText, { opacity: deleteRedOpacity }]}>×</Animated.Text>
         </Pressable>
       </View>
-      <View style={styles.fulfillmentSwitchRow} onLayout={(event) => setSwitchWidth(event.nativeEvent.layout.width)}>
+      <View
+        style={[styles.fulfillmentSwitchRow, { backgroundColor: darkMode ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)' }]}
+        onLayout={(event) => setSwitchWidth(event.nativeEvent.layout.width)}
+      >
         <Animated.View
           pointerEvents="none"
           style={[
             styles.fulfillmentSwitchIndicator,
             {
+              backgroundColor: colors.card,
               width: indicatorWidth,
               transform: [{ translateX: indicatorTranslateX }],
             },
@@ -579,7 +764,7 @@ function VerificationNoteCard({
             onUpdate(note.id, { fulfilled: true });
           }}
         >
-          <Text style={[styles.fulfillmentSwitchText, note.fulfilled ? styles.fulfillmentActiveText : null]}>应验</Text>
+          <Text style={[styles.fulfillmentSwitchText, { color: note.fulfilled ? colors.text : colors.mutedText }]}>{t('analysis.fulfilled')}</Text>
         </Pressable>
         <Pressable
           style={styles.fulfillmentSwitchOption}
@@ -588,7 +773,7 @@ function VerificationNoteCard({
             onUpdate(note.id, { fulfilled: false });
           }}
         >
-          <Text style={[styles.fulfillmentSwitchText, !note.fulfilled ? styles.fulfillmentActiveText : null]}>未应验</Text>
+          <Text style={[styles.fulfillmentSwitchText, { color: !note.fulfilled ? colors.text : colors.mutedText }]}>{t('analysis.unfulfilled')}</Text>
         </Pressable>
       </View>
       <Pressable style={styles.resultNoteInputWrap} onPress={(event) => event.stopPropagation()}>
@@ -596,11 +781,11 @@ function VerificationNoteCard({
           value={note.note}
           onChangeText={(text) => onUpdate(note.id, { note: text })}
           onFocus={onFocus}
-          placeholder="写下应期、结果、细节与复盘。"
-          placeholderTextColor="#888"
+          placeholder={t('analysis.notePlaceholder')}
+          placeholderTextColor={colors.faintText}
           multiline
           textAlignVertical="top"
-          style={styles.resultNoteInput}
+          style={[styles.resultNoteInput, { backgroundColor: darkMode ? 'rgba(255,255,255,0.08)' : 'rgba(255,255,255,0.78)', color: colors.text }]}
         />
       </Pressable>
     </Animated.View>
@@ -608,6 +793,8 @@ function VerificationNoteCard({
 }
 
 function VerificationNoteMeasureCard({ onMeasured }: { onMeasured: (height: number) => void }) {
+  const { darkMode, colors } = useAppTheme();
+  const { t, language } = useAppLanguage();
   return (
     <View
       pointerEvents="none"
@@ -618,32 +805,33 @@ function VerificationNoteMeasureCard({ onMeasured }: { onMeasured: (height: numb
       }}
     >
       <View style={styles.resultNoteCard}>
+        <View style={[styles.resultNoteBackground, { backgroundColor: darkMode ? '#11291d' : '#dceee1' }]} />
         <View style={styles.resultNoteHeader}>
           <View>
-            <Text style={styles.unionTitle}>批注</Text>
-            <Text style={styles.resultNoteTime}>{formatCompactChineseDateTime(new Date())}</Text>
+            <Text style={[styles.unionTitle, { color: colors.text }]}>{t('analysis.note')}</Text>
+            <Text style={[styles.resultNoteTime, { color: colors.faintText }]}>{formatCompactDateTime(new Date(), language)}</Text>
           </View>
           <View style={styles.deleteIconButton}>
-            <Text style={styles.deleteIconText}>×</Text>
+            <Text style={[styles.deleteIconText, { color: colors.text }]}>×</Text>
           </View>
         </View>
-        <View style={styles.fulfillmentSwitchRow}>
+        <View style={[styles.fulfillmentSwitchRow, { backgroundColor: darkMode ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)' }]}>
           <View style={styles.fulfillmentSwitchOption}>
-            <Text style={[styles.fulfillmentSwitchText, styles.fulfillmentActiveText]}>应验</Text>
+            <Text style={[styles.fulfillmentSwitchText, { color: colors.text }]}>{t('analysis.fulfilled')}</Text>
           </View>
           <View style={styles.fulfillmentSwitchOption}>
-            <Text style={styles.fulfillmentSwitchText}>未应验</Text>
+            <Text style={[styles.fulfillmentSwitchText, { color: colors.mutedText }]}>{t('analysis.unfulfilled')}</Text>
           </View>
         </View>
         <View style={styles.resultNoteInputWrap}>
           <TextInput
             value=""
             editable={false}
-            placeholder="写下应期、结果、细节与复盘。"
-            placeholderTextColor="#888"
+            placeholder={t('analysis.notePlaceholder')}
+            placeholderTextColor={colors.faintText}
             multiline
             textAlignVertical="top"
-            style={styles.resultNoteInput}
+            style={[styles.resultNoteInput, { backgroundColor: darkMode ? 'rgba(255,255,255,0.08)' : 'rgba(255,255,255,0.78)', color: colors.text }]}
           />
         </View>
       </View>
@@ -685,11 +873,12 @@ function hexagramPalaceText(name: string | undefined, recordHexagram: Props['rou
 }
 
 function HexLine({ line, muted = false, highlightColor, yinGap }: { line: HexagramLine; muted?: boolean; highlightColor?: string; yinGap?: number }) {
-  return <RawHexLine yinYang={line.yinYang} muted={muted} highlightColor={highlightColor} yinGap={yinGap} />;
+  const { colors } = useAppTheme();
+  return <RawHexLine yinYang={line.yinYang} muted={muted} highlightColor={highlightColor} defaultColor={colors.text} mutedColor={colors.faintText} yinGap={yinGap} />;
 }
 
-function RawHexLine({ yinYang, muted = false, highlightColor, yinGap }: { yinYang: YinYang; muted?: boolean; highlightColor?: string; yinGap?: number }) {
-  const strokeStyle = highlightColor ? { backgroundColor: highlightColor } : muted ? styles.strokeMuted : null;
+function RawHexLine({ yinYang, muted = false, highlightColor, defaultColor = '#000', mutedColor = '#555', yinGap }: { yinYang: YinYang; muted?: boolean; highlightColor?: string; defaultColor?: string; mutedColor?: string; yinGap?: number }) {
+  const strokeStyle = { backgroundColor: highlightColor ?? (muted ? mutedColor : defaultColor) };
   if (yinYang === 'yin') {
     return (
       <View style={[styles.brokenWrap, yinGap === undefined ? null : { gap: yinGap }]}>
@@ -702,6 +891,7 @@ function RawHexLine({ yinYang, muted = false, highlightColor, yinGap }: { yinYan
 }
 
 function ElementalStatusBadge({ status, specialStatus }: { status?: string; specialStatus?: string }) {
+  const { language } = useAppLanguage();
   if (specialStatus === '月破') {
     return (
       <View style={[styles.statusBadge, styles.monthBreakBadge]}>
@@ -733,7 +923,14 @@ function ElementalStatusBadge({ status, specialStatus }: { status?: string; spec
   const colors = STATUS_COLORS[normalizedStatus];
   return (
     <View style={[styles.statusBadge, { backgroundColor: colors.background }]}>
-      <Text style={[styles.statusBadgeText, { color: colors.text }]}>{normalizedStatus}</Text>
+      <Text
+        numberOfLines={1}
+        adjustsFontSizeToFit
+        minimumFontScale={0.46}
+        style={[styles.statusBadgeText, { color: colors.text }]}
+      >
+        {normalizedStatus}
+      </Text>
     </View>
   );
 }
@@ -766,6 +963,7 @@ function HexPairRow({
   finalYinGap,
   spiritAnalyses,
   ripples,
+  language,
 }: {
   baseLine: HexagramLine;
   changedLine: HexagramLine;
@@ -794,9 +992,12 @@ function HexPairRow({
   finalYinGap: number;
   spiritAnalyses: SpiritAnalysis[];
   ripples: SpiritRippleItem[];
+  language: 'zh' | 'en';
 }) {
-  const meta = metaTextForMode(baseLine, mode);
-  const changedMeta = metaTextForMode(changedLine, mode);
+  const { darkMode, colors } = useAppTheme();
+  const meta = metaTextForMode(baseLine, mode, language);
+  const changedMeta = metaTextForMode(changedLine, mode, language);
+  const metaWidth = language === 'en' ? META_COLUMN_WIDTH_EN : META_COLUMN_WIDTH;
   const changedLineOpacity = hasChanged ? 1 : unchangedChangedLinesProgress;
   const statusScale = statusVisualProgress.interpolate({ inputRange: [0, 1], outputRange: [0.7, 1] });
   const isHiddenSpiritActive = activeHiddenSpiritIndex === baseLine.index;
@@ -805,10 +1006,10 @@ function HexPairRow({
   const hiddenOverlayTranslateY = hiddenSpiritOverlayProgress.interpolate({ inputRange: [0, 1], outputRange: [20, 32] });
   const canShowHiddenSpirit = hasEffectiveHiddenSpirit(baseLine);
   const hiddenSpirit = baseLine.hiddenSpirit;
-  const hiddenMeta = hiddenSpiritMetaForMode(baseLine, mode);
+  const hiddenMeta = hiddenSpiritMetaForMode(baseLine, mode, language);
   const spiritColor = spiritLineColor(baseLine.index, false, spiritAnalyses);
   const hiddenSpiritColor = spiritLineColor(baseLine.index, true, spiritAnalyses);
-  const roleColumnLabels = roleLabels(baseLine, spiritAnalyses);
+  const roleColumnLabels = roleLabels(baseLine, spiritAnalyses, language);
   const baseRipples = ripples.filter((ripple) => ripple.lineIndex === baseLine.index && !ripple.isHidden);
   const hiddenRipples = ripples.filter((ripple) => ripple.lineIndex === baseLine.index && ripple.isHidden);
   const rowStyle = [styles.hexLineRow, (baseRipples.length > 0 || hiddenRipples.length > 0 || isHiddenSpiritActive) ? styles.hexLineRowActive : null];
@@ -817,7 +1018,10 @@ function HexPairRow({
       {hasChanged ? (
         <LinearGradient
           pointerEvents="none"
-          colors={['#ffffff', '#fff8d6', '#fff0a8', '#fff8d6', '#ffffff']}
+          colors={darkMode
+            ? ['rgba(24,24,27,0)', 'rgba(146,93,30,0.22)', 'rgba(206,132,42,0.36)', 'rgba(146,93,30,0.22)', 'rgba(24,24,27,0)']
+            : ['#ffffff', '#fff8d6', '#fff0a8', '#fff8d6', '#ffffff']
+          }
           locations={[0, 0.12, 0.5, 0.88, 1]}
           start={{ x: 0, y: 0.5 }}
           end={{ x: 1, y: 0.5 }}
@@ -831,7 +1035,7 @@ function HexPairRow({
       <View style={styles.roleColumn}>
         <Animated.View style={[styles.roleLabelRow, { opacity: annotationOpacity }]}>
           {roleColumnLabels.map((label) => (
-            <Text key={label} style={styles.roleText}>{label}</Text>
+            <Text key={label} style={[styles.roleText, { color: colors.text }]}>{label}</Text>
           ))}
         </Animated.View>
       </View>
@@ -854,8 +1058,8 @@ function HexPairRow({
             <ElementalStatusBadge status={baseLine.elementalStatus} specialStatus={baseLine.specialStatus} />
           </Animated.View>
         </Animated.View>
-        <Pressable style={styles.metaColumn} onPress={onToggleMode}>
-          <MetaDisplaySwitcher meta={meta} translateX={metaTranslateX} opacity={Animated.multiply(annotationOpacity, metaOpacity)} />
+        <Pressable style={[styles.metaColumn, { width: metaWidth }]} onPress={onToggleMode}>
+          <MetaDisplaySwitcher meta={meta} translateX={metaTranslateX} opacity={Animated.multiply(annotationOpacity, metaOpacity)} width={metaWidth} />
         </Pressable>
       </View>
       {canShowHiddenSpirit && !showChanged && hiddenSpirit && isHiddenSpiritActive ? (
@@ -886,7 +1090,7 @@ function HexPairRow({
                 <ElementalStatusBadge status={hiddenSpirit.elementalStatus} specialStatus={hiddenSpirit.specialStatus} />
               </Animated.View>
             </Animated.View>
-            <Pressable style={[styles.metaColumn, styles.hiddenSpiritMetaColumn]} onPress={onToggleMode}>
+            <Pressable style={[styles.metaColumn, styles.hiddenSpiritMetaColumn, { width: metaWidth }]} onPress={onToggleMode}>
               <MetaDisplaySwitcher
                 meta={hiddenMeta}
                 translateX={metaTranslateX}
@@ -894,6 +1098,7 @@ function HexPairRow({
                 primaryStyle={styles.hiddenSpiritMetaPrimary}
                 secondaryStyle={styles.hiddenSpiritMetaSecondary}
                 fitText
+                width={metaWidth}
               />
             </Pressable>
           </View>
@@ -927,7 +1132,7 @@ function HexPairRow({
                   <ElementalStatusBadge status={hiddenSpirit.elementalStatus} specialStatus={hiddenSpirit.specialStatus} />
                 </Animated.View>
               </Animated.View>
-              <Pressable style={[styles.metaColumn, styles.hiddenSpiritMetaColumn]} onPress={onToggleMode}>
+              <Pressable style={[styles.metaColumn, styles.hiddenSpiritMetaColumn, { width: metaWidth }]} onPress={onToggleMode}>
                 <MetaDisplaySwitcher
                   meta={hiddenMeta}
                   translateX={metaTranslateX}
@@ -935,6 +1140,7 @@ function HexPairRow({
                   primaryStyle={styles.hiddenSpiritMetaPrimary}
                   secondaryStyle={styles.hiddenSpiritMetaSecondary}
                   fitText
+                  width={metaWidth}
                 />
               </Pressable>
             </Animated.View>
@@ -953,11 +1159,12 @@ function HexPairRow({
               <ElementalStatusBadge status={changedLine.elementalStatus} specialStatus={changedLine.specialStatus} />
             </Animated.View>
           </Animated.View>
-          <Pressable style={styles.metaColumn} onPress={onToggleMode}>
+          <Pressable style={[styles.metaColumn, { width: metaWidth }]} onPress={onToggleMode}>
             <MetaDisplaySwitcher
               meta={changedMeta}
               translateX={metaTranslateX}
               opacity={Animated.multiply(Animated.multiply(annotationOpacity, metaOpacity), changedLineOpacity)}
+              width={metaWidth}
             />
           </Pressable>
         </View>
@@ -969,7 +1176,10 @@ function HexPairRow({
 }
 
 export function AnalysisScreen({ navigation, route }: Props) {
+  const { darkMode, colors } = useAppTheme();
+  const { language, t } = useAppLanguage();
   const { record } = route.params;
+  const fromHistory = route.params.fromHistory === true;
   const { width: windowWidth } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const [metaMode, setMetaMode] = useState<MetaMode>('sixKin');
@@ -985,12 +1195,17 @@ export function AnalysisScreen({ navigation, route }: Props) {
   const [spiritReasonAnchor, setSpiritReasonAnchor] = useState({ x: 20, y: 120 });
   const [spiritRipples, setSpiritRipples] = useState<SpiritRippleItem[]>([]);
   const [selectedTextSection, setSelectedTextSection] = useState<HexagramTextSection>('judgment');
-  const [verificationNotes, setVerificationNotes] = useState<VerificationNote[]>([]);
+  const [verificationNotes, setVerificationNotes] = useState<VerificationNote[]>(record.verificationNotes ?? []);
+  const verificationNotesRef = useRef<VerificationNote[]>(record.verificationNotes ?? []);
   const [pendingVerificationNote, setPendingVerificationNote] = useState<VerificationNote | undefined>();
   const [armedDeleteNoteId, setArmedDeleteNoteId] = useState<number | undefined>();
   const [moreMenuVisible, setMoreMenuVisible] = useState(false);
   const [moreMenuMounted, setMoreMenuMounted] = useState(false);
-  const [savedRecord, setSavedRecord] = useState(false);
+  const [savedRecord, setSavedRecord] = useState(fromHistory);
+  const savedRecordRef = useRef(fromHistory);
+  const [favorite, setFavorite] = useState(Boolean(record.favorite));
+  const favoriteVisualProgress = useRef(new Animated.Value(record.favorite ? 1 : 0)).current;
+  const saveToastProgress = useRef(new Animated.Value(0)).current;
   const [unsavedPromptVisible, setUnsavedPromptVisible] = useState(false);
   const [finalYinGap, setFinalYinGap] = useState(INTRO_YIN_GAP);
   const statusVisualProgress = useRef(new Animated.Value(0)).current;
@@ -1001,6 +1216,7 @@ export function AnalysisScreen({ navigation, route }: Props) {
   const metaSwitching = useRef(false);
   const hiddenSpiritOverlayProgress = useRef(new Animated.Value(0)).current;
   const analysisPageScrollX = useRef(new Animated.Value(0)).current;
+  const analysisPagerRef = useRef<ScrollView | null>(null);
   const dividerCollapseProgress = useRef(new Animated.Value(0)).current;
   const dividerCollapseValue = useRef(0);
   const dividerGripOpacity = useRef(new Animated.Value(0)).current;
@@ -1068,6 +1284,28 @@ export function AnalysisScreen({ navigation, route }: Props) {
     extrapolate: 'clamp',
   });
 
+  const markRecordSaved = () => {
+    savedRecordRef.current = true;
+    setSavedRecord(true);
+  };
+
+  const syncVerificationNotes = (updater: (notes: VerificationNote[]) => VerificationNote[]) => {
+    setVerificationNotes((notes) => {
+      const nextNotes = updater(notes);
+      verificationNotesRef.current = nextNotes;
+      return nextNotes;
+    });
+  };
+
+  async function saveRecordWithNotes(notes: VerificationNote[]) {
+    await saveRecord({
+      ...record,
+      favorite,
+      verificationNotes: notes,
+    });
+    markRecordSaved();
+  }
+
   useEffect(() => {
     UIManager.setLayoutAnimationEnabledExperimental?.(true);
   }, []);
@@ -1106,6 +1344,7 @@ export function AnalysisScreen({ navigation, route }: Props) {
         easing: Easing.out(Easing.cubic),
         useNativeDriver: true,
       }).start();
+      saveRecordWithNotes(verificationNotesRef.current);
     });
     return () => {
       showSubscription.remove();
@@ -1212,6 +1451,10 @@ export function AnalysisScreen({ navigation, route }: Props) {
     setSelectedTextSection(TEXT_SECTIONS[index]);
   };
 
+  const selectAnalysisPage = (index: number) => {
+    analysisPagerRef.current?.scrollTo({ x: analysisPageWidth * index, animated: true });
+  };
+
   const startSpiritRipple = (lineIndex: number, isHidden: boolean) => {
     const id = rippleIdRef.current + 1;
     rippleIdRef.current = id;
@@ -1230,6 +1473,7 @@ export function AnalysisScreen({ navigation, route }: Props) {
 
   const focusSpiritLine = (analysis: SpiritAnalysis) => {
     if (analysis.lineIndex === undefined) return;
+    Haptics.selectionAsync().catch(() => undefined);
     if (hiddenSpiritAutoHideTimer.current) {
       clearTimeout(hiddenSpiritAutoHideTimer.current);
       hiddenSpiritAutoHideTimer.current = undefined;
@@ -1252,7 +1496,10 @@ export function AnalysisScreen({ navigation, route }: Props) {
 
   const updateVerificationNote = (id: number, patch: Partial<VerificationNote>) => {
     setArmedDeleteNoteId(undefined);
-    setVerificationNotes((notes) => notes.map((note) => (note.id === id ? { ...note, ...patch } : note)));
+    const nextNotes = verificationNotesRef.current.map((note) => (note.id === id ? { ...note, ...patch } : note));
+    verificationNotesRef.current = nextNotes;
+    setVerificationNotes(nextNotes);
+    saveRecordWithNotes(nextNotes);
   };
 
   const deleteVerificationNote = (id: number) => {
@@ -1262,7 +1509,11 @@ export function AnalysisScreen({ navigation, route }: Props) {
       update: { type: LayoutAnimation.Types.easeInEaseOut },
       delete: { type: LayoutAnimation.Types.easeInEaseOut, property: LayoutAnimation.Properties.opacity },
     });
-    setVerificationNotes((notes) => notes.filter((note) => note.id !== id));
+    syncVerificationNotes((notes) => {
+      const nextNotes = notes.filter((note) => note.id !== id);
+      saveRecordWithNotes(nextNotes);
+      return nextNotes;
+    });
   };
 
   const addVerificationNote = () => {
@@ -1273,6 +1524,7 @@ export function AnalysisScreen({ navigation, route }: Props) {
     const id = Date.now();
     const createdAt = new Date().toISOString();
     const nextNote = { id, fulfilled: true, note: '', createdAt };
+    saveRecordWithNotes([...verificationNotes, nextNote]);
     const targetHeight = measuredNoteCardHeight.current;
 
     noteInsertSpacerHeight.stopAnimation(() => {
@@ -1288,7 +1540,10 @@ export function AnalysisScreen({ navigation, route }: Props) {
           addingNoteRef.current = false;
           return;
         }
-        setVerificationNotes((notes) => [...notes, nextNote]);
+        syncVerificationNotes((notes) => {
+          const nextNotes = [...notes, nextNote];
+          return nextNotes;
+        });
         setPendingVerificationNote(undefined);
         requestAnimationFrame(() => {
           noteInsertSpacerHeight.setValue(0);
@@ -1356,30 +1611,73 @@ export function AnalysisScreen({ navigation, route }: Props) {
     openMoreMenu();
   };
 
+  const recordForSaving = () => ({
+    ...record,
+    favorite,
+    verificationNotes,
+  });
+
+  const showSaveToast = () => {
+    saveToastProgress.stopAnimation();
+    saveToastProgress.setValue(0);
+    Animated.sequence([
+      Animated.timing(saveToastProgress, {
+        toValue: 1,
+        duration: 220,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }),
+      Animated.delay(1050),
+      Animated.timing(saveToastProgress, {
+        toValue: 0,
+        duration: 260,
+        easing: Easing.inOut(Easing.cubic),
+        useNativeDriver: true,
+      }),
+    ]).start();
+  };
+
   const shareRecord = async () => {
     closeMoreMenu();
     await Share.share({
       message: [
-        `六爻起卦：${record.hexagram.name}${hasChangedHexagram ? ` 变 ${record.hexagram.changedName}` : ''}`,
-        `所问：${record.question}`,
-        `时间：${formatCompactChineseDateTime(record.createdAt)}`,
-        `干支：${formatStemBranchDateTime(record.lunarInfo)}`,
+        `${language === 'en' ? 'Wenshi casting' : '六爻起卦'}：${record.hexagram.name}${hasChangedHexagram ? ` ${t('analysis.changesTo')} ${record.hexagram.changedName}` : ''}`,
+        `${language === 'en' ? 'Question' : '所问'}：${record.question}`,
+        `${t('analysis.modernTime')}：${formatCompactChineseDateTime(record.createdAt)}`,
+        `${t('analysis.stemBranchTime')}：${formatStemBranchDateTimeLocalized(record.lunarInfo, language)}`,
       ].join('\n'),
     });
   };
 
   const saveCurrentRecord = async () => {
     closeMoreMenu();
-    await saveRecord(record);
-    setSavedRecord(true);
-    navigation.navigate('Save');
+    await saveRecord(recordForSaving());
+    markRecordSaved();
+    showSaveToast();
   };
 
   const saveAndLeave = async () => {
-    await saveRecord(record);
-    setSavedRecord(true);
+    await saveRecord(recordForSaving());
+    markRecordSaved();
     setUnsavedPromptVisible(false);
     navigation.goBack();
+  };
+
+  const toggleFavorite = async () => {
+    const nextFavorite = !favorite;
+    Animated.timing(favoriteVisualProgress, {
+      toValue: nextFavorite ? 1 : 0,
+      duration: 260,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    }).start();
+    setFavorite(nextFavorite);
+    await saveRecord({
+      ...record,
+      favorite: nextFavorite,
+      verificationNotes,
+    });
+    markRecordSaved();
   };
 
   const leaveWithoutSaving = () => {
@@ -1392,7 +1690,7 @@ export function AnalysisScreen({ navigation, route }: Props) {
   };
 
   const promptBeforeLeaving = () => {
-    if (savedRecord) {
+    if (fromHistory || savedRecordRef.current) {
       navigation.goBack();
       return;
     }
@@ -1815,62 +2113,82 @@ export function AnalysisScreen({ navigation, route }: Props) {
   }, [measureInWindow, syncFinalYinGap, windowWidth, showStatus, hideUnchangedChangedLines]);
 
   return (
-    <View style={[styles.container, { paddingTop: insets.top }]}>
+    <View style={[styles.container, { paddingTop: insets.top, backgroundColor: colors.background }]}>
       <View style={styles.edgeBackGestureArea} {...edgeBackPanResponder.panHandlers} />
-      <Animated.View pointerEvents={moreMenuVisible ? 'auto' : 'none'} style={[styles.moreMenuBackdrop, { opacity: moreBackdropProgress }]}>
+      <Animated.View pointerEvents={moreMenuVisible ? 'auto' : 'none'} style={[styles.moreMenuBackdrop, { backgroundColor: colors.overlay, opacity: moreBackdropProgress }]}>
         <Pressable style={StyleSheet.absoluteFill} onPress={closeMoreMenu} />
       </Animated.View>
-      <Animated.View style={[styles.content, { opacity: mainOpacity }]}>
+      <Animated.View
+        pointerEvents="none"
+        style={[
+          styles.saveToast,
+          {
+            top: insets.top + 50,
+            opacity: saveToastProgress,
+            transform: [
+              {
+                translateY: saveToastProgress.interpolate({
+                  inputRange: [0, 1],
+                  outputRange: [-8, 0],
+                }),
+              },
+            ],
+          },
+        ]}
+      >
+        <Text style={styles.saveToastText}>{t('analysis.saved')}</Text>
+      </Animated.View>
+      <Animated.View style={[styles.content, { backgroundColor: colors.card, opacity: mainOpacity }]}>
         <View style={styles.header}>
           {hasChangedHexagram ? (
             <View style={styles.titleRow}>
               <Pressable onPress={(event) => openHexagramText(record.hexagram.name, event)}>
-                <Text style={styles.title}>{record.hexagram.name}</Text>
+                <Text style={[styles.title, { color: colors.text }]}>{record.hexagram.name}</Text>
               </Pressable>
-              <Text style={styles.titleTransition}>变</Text>
+              <Text style={[styles.titleTransition, { color: colors.faintText }]}>{t('analysis.changesTo')}</Text>
               <Pressable onPress={(event) => openHexagramText(record.hexagram.changedName, event)}>
-                <Text style={styles.title}>{record.hexagram.changedName}</Text>
+                <Text style={[styles.title, { color: colors.text }]}>{record.hexagram.changedName}</Text>
               </Pressable>
             </View>
           ) : (
             <Pressable onPress={(event) => openHexagramText(record.hexagram.name, event)}>
-              <Text style={styles.title}>{record.hexagram.name}</Text>
+              <Text style={[styles.title, { color: colors.text }]}>{record.hexagram.name}</Text>
             </Pressable>
           )}
-          <Text style={styles.subtitle}>{record.question}</Text>
+          <Text style={[styles.subtitle, { color: colors.mutedText }]}>{record.question}</Text>
         </View>
         <Animated.View style={[styles.collapsibleTop, { height: collapsibleHeight, opacity: collapsibleOpacity }]}>
           <View style={styles.dateInfoRow}>
             <Pressable style={styles.dateInfoItem} onPress={toggleStatus}>
-              <Text style={styles.dateInfoLabel}>月建</Text>
+              <Text style={[styles.dateInfoLabel, { color: colors.mutedText }]}>{t('analysis.monthBranch')}</Text>
               <Text style={[styles.dateInfoValue, { color: stemBranchColor(record.lunarInfo.monthStemBranch) }]}>{record.lunarInfo.monthStemBranch}</Text>
             </Pressable>
             <Pressable style={styles.dateInfoItem} onPress={toggleStatus}>
-              <Text style={styles.dateInfoLabel}>日辰</Text>
+              <Text style={[styles.dateInfoLabel, { color: colors.mutedText }]}>{t('analysis.dayBranch')}</Text>
               <View style={styles.dayInfoValueWrap}>
                 <Text style={[styles.dateInfoValue, { color: stemBranchColor(record.lunarInfo.dayStemBranch) }]}>{record.lunarInfo.dayStemBranch}</Text>
-                <Text style={styles.dateInfoSub}>旬空 {record.lunarInfo.voidBranches.join('')}</Text>
+                <Text style={[styles.dateInfoSub, { color: colors.faintText }]}>{t('analysis.void')} {record.lunarInfo.voidBranches.join('')}</Text>
               </View>
             </Pressable>
           </View>
-          <View style={styles.hexagramStage}>
+          <View style={[styles.hexagramStage, { backgroundColor: colors.card }]}>
             <View style={styles.hexHeaderRow}>
               <View style={styles.hexHeaderSide} />
               <View style={styles.hexGroup}>
                 <Pressable style={styles.hexHeaderTitleButton} onPress={(event) => openHexagramText(record.hexagram.name, event)}>
-                  <Text style={styles.hexHeaderTitle}>本卦 {baseShortName}</Text>
+                  <Text style={[styles.hexHeaderTitle, { color: colors.text }]}>{language === 'en' ? t('analysis.baseHex') : `${t('analysis.baseHex')} ${baseShortName}`}</Text>
                 </Pressable>
                 <Pressable style={styles.modeButton} onPress={toggleMetaMode}>
-                  <Text style={styles.modeButtonText}>{MODE_LABELS[metaMode]}</Text>
+                  <Text style={[styles.modeButtonText, { color: colors.text }]}>{t(MODE_LABEL_KEYS[metaMode])}</Text>
                 </Pressable>
               </View>
               {hasChangedHexagram ? (
                 <View style={styles.hexGroup}>
                   <Pressable style={styles.hexHeaderTitleButton} onPress={(event) => openHexagramText(record.hexagram.changedName, event)}>
-                    <Text style={styles.hexHeaderTitle}>变卦 {changedShortName}</Text>
+                    <Text style={[styles.hexHeaderTitle, { color: colors.text }]}>{language === 'en' ? t('analysis.changedHex') : `${t('analysis.changedHex')} ${changedShortName}`}</Text>
                   </Pressable>
                   <Pressable style={styles.modeButton} onPress={toggleMetaMode}>
-                    <Text style={styles.modeButtonText}>{MODE_LABELS[metaMode]}</Text>
+                    <Text style={[styles.modeButtonText, { color: colors.text }]}>{t(MODE_LABEL_KEYS[metaMode])}</Text>
                   </Pressable>
                 </View>
               ) : null}
@@ -1926,6 +2244,7 @@ export function AnalysisScreen({ navigation, route }: Props) {
                     finalYinGap={finalYinGap}
                     spiritAnalyses={spiritAnalyses}
                     ripples={spiritRipples}
+                    language={language}
                   />
                 );
               })}
@@ -1969,7 +2288,7 @@ export function AnalysisScreen({ navigation, route }: Props) {
         ]}
       >
         <Pressable
-          style={[styles.moreButton, moreMenuVisible ? styles.moreButtonActive : null]}
+          style={[styles.moreButton, moreMenuVisible ? styles.moreButtonActive : null, { backgroundColor: moreMenuVisible ? (darkMode ? colors.card : colors.inverse) : colors.control }]}
           onPress={toggleMoreMenu}
         >
           <Animated.View
@@ -1986,15 +2305,16 @@ export function AnalysisScreen({ navigation, route }: Props) {
               },
             ]}
           >
-            <View style={styles.moreButtonDot} />
-            <View style={styles.moreButtonDot} />
-            <View style={styles.moreButtonDot} />
+            <View style={[styles.moreButtonDot, { backgroundColor: moreMenuVisible && !darkMode ? colors.inverseText : colors.text }]} />
+            <View style={[styles.moreButtonDot, { backgroundColor: moreMenuVisible && !darkMode ? colors.inverseText : colors.text }]} />
+            <View style={[styles.moreButtonDot, { backgroundColor: moreMenuVisible && !darkMode ? colors.inverseText : colors.text }]} />
           </Animated.View>
           <Animated.Text
             pointerEvents="none"
             style={[
               styles.moreButtonClose,
               {
+                color: darkMode ? colors.text : colors.inverseText,
                 opacity: moreMenuProgress.interpolate({ inputRange: [0, 0.45, 1], outputRange: [0, 0, 1] }),
                 transform: [
                   {
@@ -2013,6 +2333,7 @@ export function AnalysisScreen({ navigation, route }: Props) {
             style={[
               styles.moreMenuCard,
               {
+                backgroundColor: colors.card,
                 opacity: moreMenuProgress,
                 transform: [
                   {
@@ -2036,31 +2357,84 @@ export function AnalysisScreen({ navigation, route }: Props) {
               }}
             >
               <Pressable style={styles.moreMenuItem} onPress={shareRecord}>
-                <Text style={styles.moreMenuIcon}>↗</Text>
-                <Text style={styles.moreMenuText}>分享</Text>
+                <View style={styles.moreMenuIcon}>
+                  <LineIcon name="share" size={19} />
+                </View>
+                <Text style={[styles.moreMenuText, { color: colors.text }]}>{t('analysis.share')}</Text>
               </Pressable>
-              <View style={styles.moreMenuDivider} />
+              <View style={[styles.moreMenuDivider, { backgroundColor: colors.divider }]} />
+              <Pressable style={styles.moreMenuItem} onPress={toggleFavorite}>
+                <View style={styles.moreMenuIcon}>
+                  <Animated.View
+                    pointerEvents="none"
+                    style={[
+                      styles.favoriteIconLayer,
+                      {
+                        opacity: favoriteVisualProgress.interpolate({ inputRange: [0, 1], outputRange: [1, 0] }),
+                        transform: [{ scale: favoriteVisualProgress.interpolate({ inputRange: [0, 1], outputRange: [1, 0.72] }) }],
+                      },
+                    ]}
+                  >
+                    <LineIcon name="star" size={19} />
+                  </Animated.View>
+                  <Animated.View
+                    pointerEvents="none"
+                    style={[
+                      styles.favoriteIconLayer,
+                      {
+                        opacity: favoriteVisualProgress,
+                        transform: [{ scale: favoriteVisualProgress.interpolate({ inputRange: [0, 1], outputRange: [0.72, 1] }) }],
+                      },
+                    ]}
+                  >
+                    <FontAwesome name="star" size={18} color="#d59a16" />
+                  </Animated.View>
+                </View>
+                <View style={styles.favoriteTextWrap}>
+                  <Animated.Text
+                    style={[
+                      styles.moreMenuText,
+                      { color: colors.text },
+                      styles.favoriteTextLayer,
+                      { opacity: favoriteVisualProgress.interpolate({ inputRange: [0, 1], outputRange: [1, 0] }) },
+                    ]}
+                  >
+                    {t('analysis.favorite')}
+                  </Animated.Text>
+                  <Animated.Text
+                    style={[
+                      styles.moreMenuText,
+                      { color: colors.text },
+                      styles.favoriteTextLayer,
+                      { opacity: favoriteVisualProgress },
+                    ]}
+                  >
+                    {t('analysis.unfavorite')}
+                  </Animated.Text>
+                </View>
+              </Pressable>
+              <View style={[styles.moreMenuDivider, { backgroundColor: colors.divider }]} />
               <Pressable style={styles.moreMenuItem} onPress={saveCurrentRecord}>
-                <Text style={styles.moreMenuIcon}>✓</Text>
-                <Text style={styles.moreMenuText}>保存</Text>
+                <View style={styles.moreMenuIcon}>
+                  <LineIcon name="save" size={19} />
+                </View>
+                <Text style={[styles.moreMenuText, { color: colors.text }]}>{t('analysis.save')}</Text>
               </Pressable>
             </Animated.View>
           </Animated.View>
         ) : null}
       </Animated.View>
       <View pointerEvents="none" style={styles.contentBottomMask} />
-      <Animated.View style={[styles.summaryBlock, { opacity: mainOpacity }]}>
-        <Animated.View pointerEvents="none" style={[styles.analysisTabsOverlay, { opacity: mainOpacity }]}>
-          <AnalysisPageTabs scrollX={analysisPageScrollX} pageWidth={analysisPageWidth} />
-        </Animated.View>
+      <Animated.View style={[styles.summaryBlock, { backgroundColor: colors.background, opacity: mainOpacity }]}>
         <Animated.ScrollView
+          ref={analysisPagerRef}
           horizontal
           pagingEnabled
           showsHorizontalScrollIndicator={false}
           nestedScrollEnabled
           decelerationRate="fast"
           snapToInterval={analysisPageWidth}
-          style={[styles.analysisPager, { width: analysisPageWidth }]}
+          style={[styles.analysisPager, { width: analysisPageWidth, backgroundColor: colors.background }]}
           onScroll={Animated.event(
             [{ nativeEvent: { contentOffset: { x: analysisPageScrollX } } }],
             { useNativeDriver: true }
@@ -2068,7 +2442,7 @@ export function AnalysisScreen({ navigation, route }: Props) {
           scrollEventThrottle={16}
         >
             <Animated.ScrollView
-              style={[styles.analysisPage, { width: analysisPageWidth }]}
+              style={[styles.analysisPage, { width: analysisPageWidth, backgroundColor: colors.background }]}
               contentContainerStyle={[styles.analysisPageContent, styles.spiritPageContent]}
               showsVerticalScrollIndicator={false}
               scrollEventThrottle={16}
@@ -2097,18 +2471,18 @@ export function AnalysisScreen({ navigation, route }: Props) {
               </View>
             </Animated.ScrollView>
             <Animated.ScrollView
-              style={[styles.analysisPage, { width: analysisPageWidth }]}
+              style={[styles.analysisPage, { width: analysisPageWidth, backgroundColor: colors.background }]}
               contentContainerStyle={styles.analysisPageContent}
               showsVerticalScrollIndicator={false}
               scrollEventThrottle={16}
             >
-              <View style={styles.unionCard}>
-                <Text style={styles.unionTitle}>三合六合</Text>
-                <Text style={styles.unionText}>{record.analysis.sanHe || '当前未见明显合局。'}</Text>
+              <View style={[styles.unionCard, { backgroundColor: colors.cardMuted }]}>
+                <Text style={[styles.unionTitle, { color: colors.text }]}>{t('analysis.unionTitle')}</Text>
+                <Text style={[styles.unionText, { color: colors.mutedText }]}>{record.analysis.sanHe ? translateChineseTerms(record.analysis.sanHe, language) : t('analysis.noUnion')}</Text>
               </View>
             </Animated.ScrollView>
             <Animated.ScrollView
-              style={[styles.analysisPage, { width: analysisPageWidth }]}
+              style={[styles.analysisPage, { width: analysisPageWidth, backgroundColor: colors.background }]}
               contentContainerStyle={styles.analysisPageContent}
               showsVerticalScrollIndicator={false}
               scrollEventThrottle={16}
@@ -2121,15 +2495,15 @@ export function AnalysisScreen({ navigation, route }: Props) {
                   Keyboard.dismiss();
                 }}
               >
-              <View style={styles.resultInfoCard}>
-                <Text style={styles.unionTitle}>起卦信息</Text>
-                <ResultInfoRow label="现代时间" value={formatCompactChineseDateTime(record.createdAt)} />
+              <View style={[styles.resultInfoCard, { backgroundColor: darkMode ? '#172333' : '#e6f0f8' }]}>
+                <Text style={[styles.unionTitle, { color: colors.text }]}>{t('analysis.castInfo')}</Text>
+                <ResultInfoRow label={t('analysis.modernTime')} value={formatCompactDateTime(record.createdAt, language)} />
                 <ResultInfoRow
-                  label="干支时间"
-                  value={formatStemBranchDateTime(record.lunarInfo)}
+                  label={t('analysis.stemBranchTime')}
+                  value={language === 'en' ? translateChineseTerms(formatStemBranchDateTimeLocalized(record.lunarInfo, language), language) : formatStemBranchDateTimeLocalized(record.lunarInfo, language)}
                 />
-                <ResultInfoRow label="问卦人" value="未填写" />
-                <ResultInfoRow label="性别" value="未填写" />
+                <ResultInfoRow label={t('analysis.querent')} value={translateChineseTerms(t('analysis.unfilled'), language)} />
+                <ResultInfoRow label={t('analysis.gender')} value={translateChineseTerms(t('analysis.unfilled'), language)} />
               </View>
               {verificationNotes.map((note) => (
                 <VerificationNoteCard
@@ -2141,6 +2515,7 @@ export function AnalysisScreen({ navigation, route }: Props) {
                   onDelete={deleteVerificationNote}
                   onFocus={focusVerificationInput}
                   keyboardLift={noteKeyboardLift}
+                  language={language}
                   onMeasured={(height) => {
                     if (height > 0 && !addingNoteRef.current) {
                       measuredNoteCardHeight.current = height;
@@ -2150,18 +2525,21 @@ export function AnalysisScreen({ navigation, route }: Props) {
               ))}
               {pendingVerificationNote ? <Animated.View style={[styles.resultNotePlaceholder, { height: noteInsertSpacerHeight }]} /> : null}
               <Pressable
-                style={styles.addResultCard}
+                style={[styles.addResultCard, { backgroundColor: colors.inverse }]}
                 onPress={(event) => {
                   event.stopPropagation();
                   addVerificationNote();
                 }}
               >
-                <Text style={styles.addResultIcon}>＋</Text>
-                <Text style={styles.addResultText}>新增批注</Text>
+                <Text style={[styles.addResultIcon, { color: colors.inverseText }]}>＋</Text>
+                <Text style={[styles.addResultText, { color: colors.inverseText }]}>{t('analysis.addNote')}</Text>
               </Pressable>
               </Pressable>
             </Animated.ScrollView>
         </Animated.ScrollView>
+        <Animated.View style={[styles.analysisTabsOverlay, { opacity: mainOpacity }]}>
+          <AnalysisPageTabs scrollX={analysisPageScrollX} pageWidth={analysisPageWidth} onSelect={selectAnalysisPage} />
+        </Animated.View>
       </Animated.View>
       <VerificationNoteMeasureCard
         onMeasured={(height) => {
@@ -2169,17 +2547,17 @@ export function AnalysisScreen({ navigation, route }: Props) {
         }}
       />
       {showIntro ? (
-        <Animated.View pointerEvents="none" style={[styles.introOverlay, { opacity: introOverlayOpacity }]}>
+        <Animated.View pointerEvents="none" style={[styles.introOverlay, { backgroundColor: colors.background, opacity: introOverlayOpacity }]}>
           <Animated.View style={[styles.introTitleRow, { opacity: introTextOpacity }]}>
-            <Animated.Text numberOfLines={1} style={[styles.introTitleText, { opacity: introBaseOpacity }]}>
+            <Animated.Text numberOfLines={1} style={[styles.introTitleText, { color: colors.text, opacity: introBaseOpacity }]}>
               {record.hexagram.name}
             </Animated.Text>
             {hasChangedHexagram ? (
               <>
-                <Animated.Text numberOfLines={1} style={[styles.introTransitionText, { opacity: introTransitionOpacity }]}>
-                  变
+                <Animated.Text numberOfLines={1} style={[styles.introTransitionText, { color: colors.faintText, opacity: introTransitionOpacity }]}>
+                  {t('analysis.changesTo')}
                 </Animated.Text>
-                <Animated.Text numberOfLines={1} style={[styles.introTitleText, { opacity: introChangedOpacity }]}>
+                <Animated.Text numberOfLines={1} style={[styles.introTitleText, { color: colors.text, opacity: introChangedOpacity }]}>
                   {record.hexagram.changedName}
                 </Animated.Text>
               </>
@@ -2250,46 +2628,46 @@ export function AnalysisScreen({ navigation, route }: Props) {
       ) : null}
       <Modal transparent visible={Boolean(selectedHexagramTextName)} animationType="fade" onRequestClose={closeHexagramText}>
         <Pressable style={styles.textModalBackdrop} onPress={closeHexagramText}>
-          <Pressable style={[styles.textModalCard, { left: hexagramTextAnchor.x, top: hexagramTextAnchor.y }]} onPress={(event) => event.stopPropagation()}>
+          <Pressable style={[styles.textModalCard, { left: hexagramTextAnchor.x, top: hexagramTextAnchor.y, backgroundColor: colors.card }]} onPress={(event) => event.stopPropagation()}>
             <View style={styles.textModalTitleRow}>
-              <Text style={styles.textModalTitle}>{visibleHexagramTextName}</Text>
+              <Text style={[styles.textModalTitle, { color: colors.text }]}>{visibleHexagramTextName}</Text>
               {selectedHexagramPalace ? <Text style={styles.hexagramPalaceText}>{selectedHexagramPalace}</Text> : null}
             </View>
-            <View style={styles.textModalDivider} />
-            <Text style={styles.textModalLabel}>卦辞</Text>
-            <Text style={styles.textModalBody}>{selectedHexagramText?.judgment ?? '暂无卦辞。'}</Text>
-            <Text style={styles.textModalLabel}>彖辞</Text>
-            <Text style={styles.textModalBody}>{selectedHexagramText?.tuan ?? '暂无彖辞。'}</Text>
+            <View style={[styles.textModalDivider, { backgroundColor: colors.divider }]} />
+            <Text style={[styles.textModalLabel, { color: colors.text }]}>{t('analysis.judgment')}</Text>
+            <Text style={[styles.textModalBody, { color: colors.mutedText }]}>{selectedHexagramText?.judgment ?? t('analysis.noJudgment')}</Text>
+            <Text style={[styles.textModalLabel, { color: colors.text }]}>{t('analysis.tuan')}</Text>
+            <Text style={[styles.textModalBody, { color: colors.mutedText }]}>{selectedHexagramText?.tuan ?? t('analysis.noTuan')}</Text>
             <Pressable onPress={openFullHexagramText}>
-              <Text style={styles.textModalLink}>查看全文</Text>
+              <Text style={styles.textModalLink}>{t('analysis.viewFullText')}</Text>
             </Pressable>
           </Pressable>
         </Pressable>
       </Modal>
       <Modal transparent visible={Boolean(selectedSpiritAnalysis)} animationType="fade" onRequestClose={() => setSelectedSpiritAnalysis(undefined)}>
         <Pressable style={styles.textModalBackdrop} onPress={() => setSelectedSpiritAnalysis(undefined)}>
-          <Pressable style={[styles.spiritReasonCard, { left: spiritReasonAnchor.x, top: spiritReasonAnchor.y }]} onPress={(event) => event.stopPropagation()}>
-            <Text style={styles.spiritReasonTitle}>{selectedSpiritAnalysis?.title} {selectedSpiritAnalysis?.displayName}</Text>
-            <View style={styles.textModalDivider} />
-            <Text style={styles.spiritReasonBody}>{selectedSpiritAnalysis?.reason}</Text>
+          <Pressable style={[styles.spiritReasonCard, { left: spiritReasonAnchor.x, top: spiritReasonAnchor.y, backgroundColor: colors.card, borderColor: colors.border }]} onPress={(event) => event.stopPropagation()}>
+            <Text style={[styles.spiritReasonTitle, { color: colors.text }]}>{translateChineseTerms(selectedSpiritAnalysis?.title, language)} {translateChineseTerms(selectedSpiritAnalysis?.displayName, language)}</Text>
+            <View style={[styles.textModalDivider, { backgroundColor: colors.divider }]} />
+            <Text style={[styles.spiritReasonBody, { color: colors.mutedText }]}>{translateChineseTerms(selectedSpiritAnalysis?.reason, language)}</Text>
           </Pressable>
         </Pressable>
       </Modal>
       <Modal transparent visible={Boolean(fullTextHexagramName)} animationType="fade" onRequestClose={() => setFullTextHexagramName(undefined)}>
-        <View style={styles.fullTextBackdrop}>
+        <View style={[styles.fullTextBackdrop, { backgroundColor: colors.overlay }]}>
           <Pressable style={styles.fullTextDismissLayer} onPress={() => setFullTextHexagramName(undefined)} />
-          <View style={styles.fullTextCard}>
+          <View style={[styles.fullTextCard, { backgroundColor: colors.card }]}>
             <View style={styles.fullTextTitleRow}>
               <View style={styles.fullTextTitleNameRow}>
-                <Text style={styles.fullTextTitle}>{fullTextHexagramName}</Text>
+                <Text style={[styles.fullTextTitle, { color: colors.text }]}>{fullTextHexagramName}</Text>
                 {fullTextHexagramPalace ? <Text style={styles.hexagramPalaceText}>{fullTextHexagramPalace}</Text> : null}
               </View>
-              <Pressable style={styles.fullTextClose} onPress={() => setFullTextHexagramName(undefined)}>
-                <Text style={styles.fullTextCloseText}>×</Text>
+              <Pressable style={[styles.fullTextClose, { backgroundColor: colors.control }]} onPress={() => setFullTextHexagramName(undefined)}>
+                <Text style={[styles.fullTextCloseText, { color: colors.text }]}>×</Text>
               </Pressable>
             </View>
             <FullTextPageTabs scrollX={fullTextScrollX} pageWidth={fullTextPageWidth} onSelect={selectFullTextPage} />
-            <View style={styles.fullTextLowerArea}>
+            <View style={[styles.fullTextLowerArea, { backgroundColor: colors.cardMuted }]}>
               <Animated.ScrollView
                 ref={fullTextPagerRef}
                 horizontal
@@ -2313,11 +2691,11 @@ export function AnalysisScreen({ navigation, route }: Props) {
                     showsVerticalScrollIndicator={false}
                     nestedScrollEnabled
                   >
-                    {fullTextBlocks(fullHexagramText, section).map((block, index) => (
-                      <View key={`${section}-${block.title}-${index}`} style={styles.fullTextBlockCard}>
+                    {fullTextBlocks(fullHexagramText, section, t, language).map((block, index) => (
+                      <View key={`${section}-${block.title}-${index}`} style={[styles.fullTextBlockCard, { backgroundColor: colors.card }]}>
                         <Text style={styles.fullTextBlockTitle}>{block.title}</Text>
-                        <Text style={styles.fullTextBody}>{block.original}</Text>
-                        {block.translation ? <Text style={styles.fullTextTranslation}>{block.translation}</Text> : null}
+                        <Text style={[styles.fullTextBody, { color: colors.text }]}>{block.original}</Text>
+                        {block.translation ? <Text style={[styles.fullTextTranslation, { color: colors.mutedText }]}>{block.translation}</Text> : null}
                       </View>
                     ))}
                   </Animated.ScrollView>
@@ -2328,17 +2706,17 @@ export function AnalysisScreen({ navigation, route }: Props) {
         </View>
       </Modal>
       <Modal transparent visible={unsavedPromptVisible} animationType="fade" onRequestClose={closeUnsavedPrompt}>
-        <View style={styles.unsavedBackdrop}>
+        <View style={[styles.unsavedBackdrop, { backgroundColor: colors.overlay }]}>
           <Pressable style={StyleSheet.absoluteFill} onPress={closeUnsavedPrompt} />
-          <View style={styles.unsavedCard}>
-            <Text style={styles.unsavedTitle}>本次起卦尚未保存</Text>
-            <Text style={styles.unsavedBody}>离开后将无法在历史记录中查看这次卦象与分析。</Text>
+          <View style={[styles.unsavedCard, { backgroundColor: colors.card }]}>
+            <Text style={[styles.unsavedTitle, { color: colors.text }]}>{t('analysis.unsavedTitle')}</Text>
+            <Text style={[styles.unsavedBody, { color: colors.mutedText }]}>{t('analysis.unsavedBody')}</Text>
             <View style={styles.unsavedActions}>
-              <Pressable style={[styles.unsavedButton, styles.unsavedSecondaryButton]} onPress={leaveWithoutSaving}>
-                <Text style={styles.unsavedSecondaryText}>不保存</Text>
+              <Pressable style={[styles.unsavedButton, styles.unsavedSecondaryButton, { backgroundColor: colors.control }]} onPress={leaveWithoutSaving}>
+                <Text style={[styles.unsavedSecondaryText, { color: colors.text }]}>{t('analysis.leaveWithoutSaving')}</Text>
               </Pressable>
-              <Pressable style={[styles.unsavedButton, styles.unsavedPrimaryButton]} onPress={saveAndLeave}>
-                <Text style={styles.unsavedPrimaryText}>保存</Text>
+              <Pressable style={[styles.unsavedButton, styles.unsavedPrimaryButton, { backgroundColor: colors.inverse }]} onPress={saveAndLeave}>
+                <Text style={[styles.unsavedPrimaryText, { color: colors.inverseText }]}>{t('analysis.save')}</Text>
               </Pressable>
             </View>
           </View>
@@ -2406,6 +2784,20 @@ const styles = StyleSheet.create({
     zIndex: 20,
     elevation: 20,
   },
+  saveToast: {
+    position: 'absolute',
+    alignSelf: 'center',
+    minWidth: 92,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: 'rgba(17,17,17,0.92)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 16,
+    zIndex: 80,
+    elevation: 80,
+  },
+  saveToastText: { color: '#fff', fontSize: 13, fontWeight: '900' },
   moreMenuLayer: {
     position: 'absolute',
     left: 12,
@@ -2459,7 +2851,7 @@ const styles = StyleSheet.create({
     position: 'absolute',
     right: 14,
     top: 54,
-    width: 128,
+    width: 140,
     borderRadius: 16,
     backgroundColor: '#fff',
     paddingVertical: 8,
@@ -2467,8 +2859,11 @@ const styles = StyleSheet.create({
     elevation: 31,
   },
   moreMenuItem: { height: 42, flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 14 },
-  moreMenuIcon: { width: 20, color: '#111', fontSize: 17, fontWeight: '900', textAlign: 'center' },
+  moreMenuIcon: { width: 20, height: 22, alignItems: 'center', justifyContent: 'center', position: 'relative' },
   moreMenuText: { color: '#111', fontSize: 14, fontWeight: '900' },
+  favoriteIconLayer: { position: 'absolute', left: 0, right: 0, top: 1, bottom: 0, alignItems: 'center', justifyContent: 'center' },
+  favoriteTextWrap: { flex: 1, height: 42, position: 'relative', justifyContent: 'center' },
+  favoriteTextLayer: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, lineHeight: 42, textAlignVertical: 'center' },
   moreMenuDivider: { height: 1, backgroundColor: '#ededed', marginHorizontal: 12 },
   header: { gap: 6, paddingRight: 44 },
   title: { color: '#000', fontSize: 28, fontWeight: '800' },
@@ -2633,8 +3028,8 @@ const styles = StyleSheet.create({
   hiddenSpiritForeground: { zIndex: 2 },
   metaColumn: { width: META_COLUMN_WIDTH, height: 32, alignItems: 'center', justifyContent: 'center' },
   metaContent: { width: META_COLUMN_WIDTH, height: 32, alignItems: 'center', justifyContent: 'center' },
-  metaPrimary: { fontSize: 12, fontWeight: '800', lineHeight: 14, includeFontPadding: false },
-  metaSecondary: { fontSize: 9, marginTop: 1, fontWeight: '700', lineHeight: 10, includeFontPadding: false },
+  metaPrimary: { fontSize: 12, fontWeight: '800', lineHeight: 14, includeFontPadding: false, textAlign: 'center', flexWrap: 'nowrap', letterSpacing: -0.2 },
+  metaSecondary: { fontSize: 9, marginTop: 1, fontWeight: '700', lineHeight: 10, includeFontPadding: false, textAlign: 'center', flexWrap: 'nowrap', letterSpacing: -0.2 },
   hiddenSpiritMetaColumn: { overflow: 'visible', zIndex: 2 },
   hiddenSpiritMetaPrimary: { fontSize: 10, fontWeight: '900', lineHeight: 12, width: META_COLUMN_WIDTH, textAlign: 'center', includeFontPadding: false },
   hiddenSpiritMetaSecondary: { fontSize: 9, fontWeight: '900', lineHeight: 10, width: META_COLUMN_WIDTH, textAlign: 'center', includeFontPadding: false },
@@ -2663,26 +3058,60 @@ const styles = StyleSheet.create({
   },
   dividerHandleGrip: { width: 38, height: 4, borderRadius: 2, backgroundColor: '#d9d9d9' },
   analysisTabsOverlay: { position: 'absolute', top: 40, left: -20, right: -20, zIndex: 80, elevation: 80, alignItems: 'center' },
-  analysisTabs: { alignItems: 'center' },
-  analysisTabsInner: { width: 168, height: 28, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', position: 'relative' },
-  analysisTabPill: {
+  analysisTabs: { alignItems: 'center', overflow: 'visible' },
+  analysisTabsInner: {
+    width: 168,
+    height: 34,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
+    overflow: 'visible',
+  },
+  analysisTabPillShadow: {
     position: 'absolute',
     left: 0,
-    top: 2,
+    top: 4,
     width: 56,
-    height: 24,
+    height: 26,
     borderRadius: 12,
-    backgroundColor: '#dff3e5',
     shadowColor: '#000',
     shadowOpacity: 0.18,
     shadowRadius: 10,
     shadowOffset: { width: 0, height: 5 },
     elevation: 8,
-    zIndex: 2,
+    zIndex: 0,
   },
-  analysisTabSlot: { width: 56, height: 28, alignItems: 'center', justifyContent: 'center', flexDirection: 'row' },
-  analysisTabText: { position: 'absolute', color: '#111', fontSize: 12, fontWeight: '900', lineHeight: 16, zIndex: 3 },
-  analysisTabDot: { position: 'absolute', width: 5, height: 5, borderRadius: 2.5, backgroundColor: '#555', zIndex: 3 },
+  analysisTabPill: { flex: 1, borderRadius: 12, backgroundColor: '#dff3e5' },
+  analysisTabSlot: {
+    width: 56,
+    height: 34,
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'visible',
+    zIndex: 10,
+    elevation: 12,
+  },
+  analysisTabLayer: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    top: 0,
+    bottom: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 3,
+    elevation: 9,
+  },
+  analysisTabText: {
+    color: '#111',
+    fontSize: 12,
+    fontWeight: '900',
+    lineHeight: 16,
+    textAlign: 'center',
+    includeFontPadding: false,
+  },
+  analysisTabDot: { width: 5, height: 5, borderRadius: 2.5, backgroundColor: '#555' },
   analysisPager: { flex: 1, marginHorizontal: -20, backgroundColor: '#f7f7f7' },
   analysisPage: { flex: 1, backgroundColor: '#f7f7f7' },
   analysisPageContent: { paddingHorizontal: 20, paddingTop: 72, paddingBottom: 12, gap: 10 },
@@ -2731,6 +3160,7 @@ const styles = StyleSheet.create({
   },
   resultInfoRow: { flexDirection: 'row', justifyContent: 'space-between', gap: 12 },
   resultInfoLabel: { width: 68, color: '#555', fontSize: 12, fontWeight: '800', lineHeight: 18 },
+  resultInfoLabelWide: { width: 112 },
   resultInfoValue: { flex: 1, color: '#111', fontSize: 12, fontWeight: '800', lineHeight: 18, textAlign: 'right' },
   resultNoteCard: {
     borderRadius: 14,

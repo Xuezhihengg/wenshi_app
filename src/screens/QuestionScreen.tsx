@@ -4,12 +4,14 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Animated, Easing, Keyboard, Pressable, SafeAreaView, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AppMoreMenu } from '../components/AppMoreMenu';
+import { useAppTheme } from '../theme/AppTheme';
 import { ProfileAvatarMenu } from '../components/ProfileAvatarMenu';
 import { RootStackParamList } from '../navigation/types';
+import { getSelectedProfile } from '../storage/profileStore';
+import { useAppLanguage } from '../i18n/AppLanguage';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Question'>;
-const TITLE_TEXT = '您好，今天想问什么';
-const FLOATING_QUESTION_TEXTS = [
+const FLOATING_QUESTION_TEXTS_ZH = [
   // 感情婚姻类
   '他会主动联系我吗？', '我们的缘分有多深？', '这段感情有未来吗？', 'ta是真的爱我吗？', 
   '何时能遇到正缘？', '该不该分手？', '前任会回头吗？', '婚姻能幸福长久吗？',
@@ -71,6 +73,19 @@ const FLOATING_QUESTION_TEXTS = [
   '人生方向在哪里？', '使命是什么？', '潜能如何发挥？', '天赋在哪里？',
   '什么阻碍了发展？', '需要提升什么？', '如何改变现状？', '怎样才能更幸福？'
 ];
+const FLOATING_QUESTION_TEXTS_EN = [
+  'Will they contact me?', 'Is this relationship right?', 'Will we reconcile?', 'When will love arrive?',
+  'Should I change jobs?', 'Will this project work?', 'Can I pass the interview?', 'Is this partner reliable?',
+  'Will my finances improve?', 'Can I recover the debt?', 'Is this investment wise?', 'Should I start a business?',
+  'Will the exam go well?', 'Can I pass the certification?', 'Is this major right?', 'Will my thesis pass?',
+  'Will my health improve?', 'Is this treatment effective?', 'Should I have surgery?', 'When will I recover?',
+  'Can this conflict resolve?', 'Is this friend trustworthy?', 'Will my family understand?', 'Is there a hidden rival?',
+  'Should I choose A or B?', 'Is now the right time?', 'Should I wait?', 'Is this opportunity worth it?',
+  'Can the lost item return?', 'Will this trip be safe?', 'Is this house suitable?', 'Should I move now?',
+  'Will luck turn around?', 'What should I focus on?', 'Is this month favorable?', 'When will things settle?',
+  'Is my name auspicious?', 'Does the feng shui fit?', 'What does this dream mean?', 'Will noble help appear?',
+  'What blocks my progress?', 'How can I improve?', 'What is my direction?', 'Will my wish come true?'
+];
 const FLOATING_QUESTION_COUNT = 10;
 const FLOATING_LAYER_WIDTH = 320;
 const FLOATING_TEXT_HEIGHT = 18;
@@ -120,15 +135,15 @@ function randomFloatingPosition(text: string, aboveTitle: boolean): FloatingRect
   return { left, top, width, height: FLOATING_TEXT_HEIGHT };
 }
 
-function randomFloatingText(excludedTexts: Set<string>) {
-  const candidates = FLOATING_QUESTION_TEXTS.filter((text) => !excludedTexts.has(text));
-  const source = candidates.length ? candidates : FLOATING_QUESTION_TEXTS;
+function randomFloatingText(excludedTexts: Set<string>, sourceTexts: string[]) {
+  const candidates = sourceTexts.filter((text) => !excludedTexts.has(text));
+  const source = candidates.length ? candidates : sourceTexts;
   return source[Math.floor(Math.random() * source.length)];
 }
 
-function createFloatingQuestion(slotIndex: number, occupiedRects: FloatingRect[], occupiedTexts = new Set<string>()): FloatingQuestion | undefined {
+function createFloatingQuestion(slotIndex: number, occupiedRects: FloatingRect[], occupiedTexts = new Set<string>(), sourceTexts = FLOATING_QUESTION_TEXTS_ZH): FloatingQuestion | undefined {
   for (let attempt = 0; attempt < 80; attempt += 1) {
-    const text = randomFloatingText(occupiedTexts);
+    const text = randomFloatingText(occupiedTexts, sourceTexts);
     const preferAbove = (slotIndex + attempt) % 2 === 0;
     const rect = randomFloatingPosition(text, preferAbove);
     if (!occupiedRects.some((existing) => rectsOverlap(existing, rect))) {
@@ -140,11 +155,11 @@ function createFloatingQuestion(slotIndex: number, occupiedRects: FloatingRect[]
   return undefined;
 }
 
-function createFloatingQuestionSet() {
+function createFloatingQuestionSet(sourceTexts = FLOATING_QUESTION_TEXTS_ZH) {
   const occupiedRects: FloatingRect[] = [];
   const occupiedTexts = new Set<string>();
   return Array.from({ length: FLOATING_QUESTION_COUNT }, (_, index) => (
-    createFloatingQuestion(index, occupiedRects, occupiedTexts) ?? { text: '', style: { left: 0, top: 0 } }
+    createFloatingQuestion(index, occupiedRects, occupiedTexts, sourceTexts) ?? { text: '', style: { left: 0, top: 0 } }
   ));
 }
 
@@ -203,6 +218,8 @@ export function QuestionScreen({ navigation }: Props) {
   const [showCastTransitionQuestion, setShowCastTransitionQuestion] = useState(false);
   const [isCastTransitionLocked, setIsCastTransitionLocked] = useState(false);
   const insets = useSafeAreaInsets();
+  const { darkMode, colors } = useAppTheme();
+  const { language, t } = useAppLanguage();
   const { width: screenWidth, height: screenHeight } = useWindowDimensions();
   const keyboardLift = useRef(new Animated.Value(0)).current;
   const keyboardFocusProgress = useRef(new Animated.Value(0)).current;
@@ -222,9 +239,12 @@ export function QuestionScreen({ navigation }: Props) {
   const transitionStageBoldTextRef = useRef<Text>(null);
   const transitionStageFinalTextRef = useRef<Text>(null);
   const [transitionTextRect, setTransitionTextRect] = useState<Rect | null>(null);
-  const titleCharacters = useMemo(() => TITLE_TEXT.split(''), []);
-  const [floatingQuestions, setFloatingQuestions] = useState<FloatingQuestion[]>(() => createFloatingQuestionSet());
-  const titleProgress = useRef(titleCharacters.map(() => new Animated.Value(0))).current;
+  const titleCharacters = useMemo(() => t('question.title').split(''), [t]);
+  const floatingQuestionTexts = language === 'en' ? FLOATING_QUESTION_TEXTS_EN : FLOATING_QUESTION_TEXTS_ZH;
+  const [floatingQuestions, setFloatingQuestions] = useState<FloatingQuestion[]>(() => createFloatingQuestionSet(floatingQuestionTexts));
+  const titleProgress = useRef<Animated.Value[]>([]).current;
+  while (titleProgress.length < titleCharacters.length) titleProgress.push(new Animated.Value(0));
+  if (titleProgress.length > titleCharacters.length) titleProgress.splice(titleCharacters.length);
   const floatingProgress = useRef(floatingQuestions.map(() => new Animated.Value(0))).current;
   const activeFloatingRects = useRef<(FloatingRect | undefined)[]>([]);
   const activeFloatingTexts = useRef<(string | undefined)[]>([]);
@@ -252,6 +272,7 @@ export function QuestionScreen({ navigation }: Props) {
   };
 
   useEffect(() => {
+    titleProgress.forEach((progress) => progress.setValue(0));
     Animated.stagger(
       105,
       titleProgress.map((progress) =>
@@ -263,7 +284,7 @@ export function QuestionScreen({ navigation }: Props) {
         })
       )
     ).start();
-  }, [titleProgress]);
+  }, [titleCharacters.length, titleProgress]);
 
   useEffect(() => {
     let stopped = false;
@@ -280,7 +301,7 @@ export function QuestionScreen({ navigation }: Props) {
         if (stopped) return;
         const occupiedRects = activeFloatingRects.current.filter(Boolean) as FloatingRect[];
         const occupiedTexts = new Set(activeFloatingTexts.current.filter(Boolean) as string[]);
-        const nextQuestion = createFloatingQuestion(index, occupiedRects, occupiedTexts);
+        const nextQuestion = createFloatingQuestion(index, occupiedRects, occupiedTexts, floatingQuestionTexts);
         if (!nextQuestion) {
           runFloatingQuestion(index);
           return;
@@ -325,7 +346,11 @@ export function QuestionScreen({ navigation }: Props) {
       activeFloatingRects.current = [];
       activeFloatingTexts.current = [];
     };
-  }, [floatingProgress]);
+  }, [floatingProgress, floatingQuestionTexts]);
+
+  useEffect(() => {
+    setFloatingQuestions(createFloatingQuestionSet(floatingQuestionTexts));
+  }, [floatingQuestionTexts]);
 
   useEffect(() => {
     const show = (event: { endCoordinates: { height: number }; duration?: number }) => {
@@ -569,7 +594,8 @@ export function QuestionScreen({ navigation }: Props) {
         await animateProgress(0.24, 0.82, 1700, easeInOutCubic);
         await wait(560);
         await animateProgress(0.82, 1, 760, easeInOutCubic);
-        navigation.navigate('Cast', { question: currentQuestion });
+        const selectedProfile = await getSelectedProfile();
+        navigation.navigate('Cast', { question: currentQuestion, profile: selectedProfile });
         requestAnimationFrame(() => {
           applyCastTransitionProgress(0);
           setShowCastTransitionQuestion(false);
@@ -582,7 +608,7 @@ export function QuestionScreen({ navigation }: Props) {
   };
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={[styles.container, { backgroundColor: colors.card }]}>
       <Pressable style={styles.dismissArea} onPress={Keyboard.dismiss}>
         <Animated.View
           style={[
@@ -641,13 +667,13 @@ export function QuestionScreen({ navigation }: Props) {
                       animateQuestionIntoInput(item.text);
                     }}
                   >
-                    <Text numberOfLines={1} style={styles.floatingQuestion}>{item.text}</Text>
+                    <Text numberOfLines={1} style={[styles.floatingQuestion, { color: colors.text }]}>{item.text}</Text>
                   </Pressable>
                 </Animated.View>
               );
             })}
           </Animated.View>
-          <View style={styles.titleSafeArea}>
+          <View style={[styles.titleSafeArea, { backgroundColor: colors.card }]}>
             <View style={styles.titleRow}>
             {titleCharacters.map((character, index) => {
               const progress = titleProgress[index];
@@ -658,6 +684,7 @@ export function QuestionScreen({ navigation }: Props) {
                     styles.title,
                     {
                       opacity: progress,
+                      color: colors.text,
                     },
                   ]}
                 >
@@ -672,6 +699,7 @@ export function QuestionScreen({ navigation }: Props) {
           style={[
             styles.formPanel,
             {
+              backgroundColor: colors.card,
               paddingBottom: Math.max(10, insets.bottom ),
               transform: [{ translateY: keyboardLift }],
             },
@@ -689,10 +717,11 @@ export function QuestionScreen({ navigation }: Props) {
                 style={[
                   styles.inputFrameChrome,
                   {
+                    backgroundColor: colors.card,
                     opacity: baseContentOpacity,
                     borderColor: inputBreathProgress.interpolate({
                       inputRange: [0, 0.45, 1],
-                      outputRange: ['#000', '#6c5124', '#b98216'],
+                      outputRange: [colors.text, darkMode ? '#8b6d34' : '#6c5124', '#b98216'],
                     }),
                     shadowOpacity: inputBreathProgress.interpolate({
                       inputRange: [0, 0.45, 1],
@@ -715,9 +744,9 @@ export function QuestionScreen({ navigation }: Props) {
                   setExitingQuestionText('');
                   setQuestion(text);
                 }}
-                placeholder={isQuestionAnimating || question ? '' : '请输入所问之事'}
-                placeholderTextColor="#8a8a8a"
-                style={[styles.input, question ? styles.inputHiddenText : null]}
+                placeholder={isQuestionAnimating || question ? '' : t('question.placeholder')}
+                placeholderTextColor={colors.faintText}
+                style={[styles.input, { color: colors.text }, question ? styles.inputHiddenText : null]}
                 multiline
                 editable={!isQuestionAnimating && !isCastTransitionLocked}
                 pointerEvents={isQuestionAnimating || isCastTransitionLocked ? 'none' : 'auto'}
@@ -734,7 +763,7 @@ export function QuestionScreen({ navigation }: Props) {
               />
               {question && !isQuestionAnimating && !showQuestionOverlay ? (
                 <Animated.View pointerEvents="none" style={[styles.inputMirrorLayer, { opacity: showCastTransitionQuestion ? 0 : 1 }]}>
-                  <Text style={styles.inputMirrorText}>
+                  <Text style={[styles.inputMirrorText, { color: colors.text }]}>
                     {question}
                   </Text>
                 </Animated.View>
@@ -744,7 +773,7 @@ export function QuestionScreen({ navigation }: Props) {
                   {!isQuestionAnimating && showQuestionOverlay ? displayQuestionCharacters.map((character, index) => (
                     <View key={`display-${character}-${index}`} style={styles.animatedCharacterWrap}>
                       <Text style={[styles.animatedQuestionText, styles.animatedCharacterMeasure]}>{character}</Text>
-                      <Text style={[styles.animatedQuestionText, styles.displayQuestionText]}>{character}</Text>
+                      <Text style={[styles.animatedQuestionText, styles.displayQuestionText, { color: colors.text }]}>{character}</Text>
                     </View>
                   )) : null}
                   {exitingQuestionCharacters.map((character, index) => {
@@ -759,7 +788,7 @@ export function QuestionScreen({ navigation }: Props) {
                     return (
                       <View key={`exit-${character}-${index}`} style={styles.animatedCharacterWrap}>
                         <Text style={[styles.animatedQuestionText, styles.animatedCharacterMeasure]}>{character}</Text>
-                        <Animated.Text style={[styles.animatedQuestionText, styles.previousQuestionText, { opacity: charOpacity }]}>
+                        <Animated.Text style={[styles.animatedQuestionText, styles.previousQuestionText, { color: colors.text, opacity: charOpacity }]}>
                           {character}
                         </Animated.Text>
                       </View>
@@ -789,7 +818,7 @@ export function QuestionScreen({ navigation }: Props) {
                         <Animated.Text style={[styles.animatedQuestionText, styles.goldQuestionText, { opacity: Animated.multiply(charProgress, goldOpacity) }]}>
                           {character}
                         </Animated.Text>
-                        <Animated.Text style={[styles.animatedQuestionText, styles.blackQuestionText, { opacity: Animated.multiply(charProgress, blackOpacity) }]}>
+                        <Animated.Text style={[styles.animatedQuestionText, styles.blackQuestionText, { color: colors.text, opacity: Animated.multiply(charProgress, blackOpacity) }]}>
                           {character}
                         </Animated.Text>
                       </View>
@@ -799,11 +828,11 @@ export function QuestionScreen({ navigation }: Props) {
               ) : null}
             </Animated.View>
             <Pressable
-              style={[styles.button, !question.trim() && styles.buttonDisabled, { opacity: baseContentOpacity }]}
+              style={[styles.button, { backgroundColor: colors.inverse }, !question.trim() && styles.buttonDisabled, { opacity: baseContentOpacity }]}
               disabled={!question.trim() || isQuestionAnimating || isCastTransitionLocked}
               onPress={startCastTransition}
             >
-              <Text style={styles.buttonText}>开始起卦</Text>
+              <Text style={[styles.buttonText, { color: colors.inverseText }]}>{t('question.start')}</Text>
             </Pressable>
           </Pressable>
         </Animated.View>
@@ -813,7 +842,7 @@ export function QuestionScreen({ navigation }: Props) {
         style={[styles.topMenuLayer, { opacity: baseContentOpacity }]}
       >
         <ProfileAvatarMenu navigation={navigation} />
-        <AppMoreMenu navigation={navigation} />
+        <AppMoreMenu navigation={navigation} currentScreen="Question" />
       </Animated.View>
       {showCastTransitionQuestion && transitionTextRect ? (
         <View pointerEvents="none" style={styles.transitionTextStage}>
@@ -822,6 +851,7 @@ export function QuestionScreen({ navigation }: Props) {
             style={[
               styles.transitionText,
               {
+                color: colors.text,
                 opacity: 1,
                 left: transitionTextRect.x,
                 top: transitionTextRect.y,
@@ -840,6 +870,7 @@ export function QuestionScreen({ navigation }: Props) {
             style={[
               styles.transitionText,
               {
+                color: colors.text,
                 opacity: 0,
                 left: transitionTextRect.x,
                 top: transitionTextRect.y,
@@ -858,6 +889,7 @@ export function QuestionScreen({ navigation }: Props) {
             style={[
               styles.transitionText,
               {
+                color: colors.text,
                 opacity: 0,
                 left: transitionTextRect.x,
                 top: transitionTextRect.y,

@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "liuyao-app",
-    "slug": "liuyao-app",
+    "name": "wenshi-app",
+    "slug": "wenshi-app",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -14,7 +14,12 @@
     },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.anonymous.liuyao-app"
+      "bundleIdentifier": "com.anonymous.wenshi-app",
+      "infoPlist": {
+        "NSCameraUsageDescription": "问事需要访问相机，用于拍摄并设置个人头像。",
+        "NSPhotoLibraryUsageDescription": "问事需要访问相册，用于选择并设置个人头像。",
+        "NSPhotoLibraryAddUsageDescription": "问事需要保存图片到相册。"
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -29,6 +34,13 @@
     },
     "plugins": [
       "expo-sqlite",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "问事需要访问相册，用于选择并设置个人头像。",
+          "cameraPermission": "问事需要访问相机，用于拍摄并设置个人头像。"
+        }
+      ],
       [
         "./plugins/withCustomMetroPort",
         {

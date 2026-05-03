@@ -114,8 +114,25 @@ export type FortuneRecord = {
   id: string;
   question: string;
   createdAt: string;
+  profile?: DivinationProfile;
   hexagram: Hexagram;
   lunarInfo: LunarInfo;
   analysis: AnalysisResult;
   aiReading: string;
+  favorite?: boolean;
+  verificationNotes?: Array<{
+    id: number;
+    fulfilled: boolean;
+    note: string;
+    createdAt: string;
+  }>;
+};
+
+export type DivinationProfile = {
+  id: string;
+  name: string;
+  relation: string;
+  gender: '男' | '女' | '其他';
+  birthday: string;
+  avatarUri?: string;
 };

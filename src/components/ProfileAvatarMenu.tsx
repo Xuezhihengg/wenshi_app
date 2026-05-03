@@ -1,24 +1,55 @@
-import { useRef, useState } from 'react';
-import { Animated, Easing, Pressable, StyleSheet, Text, View } from 'react-native';
+import { useCallback, useRef, useState } from 'react';
+import { useFocusEffect } from '@react-navigation/native';
+import { Animated, Easing, Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import { DivinationProfile } from '../domain/types';
+import { listProfiles, profileInitial, setSelectedProfileId } from '../storage/profileStore';
+import { LineIcon } from './LineIcon';
+import { useAppTheme } from '../theme/AppTheme';
+import { TranslationKey, useAppLanguage } from '../i18n/AppLanguage';
 
 type Props = {
   navigation: {
-    navigate: (screen: 'Profile') => void;
+    navigate: (screen: 'Profile' | 'ArchiveCenter', params?: { profileId?: string }) => void;
   };
 };
 
-const PROFILE_OPTIONS = [
-  { name: '本人', detail: '默认档案' },
-  { name: '家人', detail: '代问档案' },
-  { name: '朋友', detail: '咨询对象' },
-];
+function relationLabelKey(relation?: string): TranslationKey {
+  const map: Record<string, TranslationKey> = {
+    本人: 'relation.self',
+    父母: 'relation.parents',
+    子女: 'relation.children',
+    伴侣: 'relation.partner',
+    亲属: 'relation.relatives',
+    朋友: 'relation.friends',
+    同事: 'relation.colleagues',
+    合作方: 'relation.partnerBusiness',
+    客户: 'relation.client',
+    其他: 'relation.other',
+  };
+  return relation ? map[relation] ?? 'relation.other' : 'archive.noRelation';
+}
 
 export function ProfileAvatarMenu({ navigation }: Props) {
+  const { darkMode, colors } = useAppTheme();
+  const { language, t } = useAppLanguage();
   const [visible, setVisible] = useState(false);
   const [mounted, setMounted] = useState(false);
-  const [selectedProfile, setSelectedProfile] = useState(PROFILE_OPTIONS[0]);
+  const [profiles, setProfiles] = useState<DivinationProfile[]>([]);
+  const [selectedProfile, setSelectedProfile] = useState<DivinationProfile | undefined>();
   const progress = useRef(new Animated.Value(0)).current;
   const backdropProgress = useRef(new Animated.Value(0)).current;
+
+  const refreshProfiles = async () => {
+    const loaded = await listProfiles();
+    setProfiles(loaded);
+    setSelectedProfile((current) => current ? loaded.find((profile) => profile.id === current.id) ?? loaded[0] : loaded[0]);
+  };
+
+  useFocusEffect(
+    useCallback(() => {
+      refreshProfiles();
+    }, [])
+  );
 
   const open = () => {
     setMounted(true);
@@ -63,40 +94,53 @@ export function ProfileAvatarMenu({ navigation }: Props) {
     });
   };
 
-  const selectProfile = (profile: typeof PROFILE_OPTIONS[number]) => {
+  const selectProfile = async (profile: DivinationProfile) => {
     setSelectedProfile(profile);
+    await setSelectedProfileId(profile.id);
     close();
   };
 
+  const avatarOpacity = progress.interpolate({ inputRange: [0, 0.45, 1], outputRange: [1, 0, 0] });
+  const avatarScale = progress.interpolate({ inputRange: [0, 1], outputRange: [1, 0.74] });
+
   return (
     <View pointerEvents="box-none" style={StyleSheet.absoluteFill}>
-      <Animated.View pointerEvents={visible ? 'auto' : 'none'} style={[styles.backdrop, { opacity: backdropProgress }]}>
+      <Animated.View pointerEvents={visible ? 'auto' : 'none'} style={[styles.backdrop, { backgroundColor: colors.overlay, opacity: backdropProgress }]}>
         <Pressable style={StyleSheet.absoluteFill} onPress={close} />
       </Animated.View>
       <View pointerEvents="box-none" style={styles.layer}>
         <Pressable
-          style={[styles.avatarButton, visible ? styles.avatarButtonActive : null]}
+          style={[styles.avatarButton, visible ? styles.avatarButtonActive : null, { backgroundColor: visible ? (darkMode ? colors.card : colors.inverse) : colors.control }]}
           onPress={open}
           onLongPress={() => navigation.navigate('Profile')}
           delayLongPress={260}
         >
-          <Animated.Text
-            pointerEvents="none"
-            style={[
-              styles.avatarText,
-              {
-                opacity: progress.interpolate({ inputRange: [0, 0.45, 1], outputRange: [1, 0, 0] }),
-                transform: [{ scale: progress.interpolate({ inputRange: [0, 1], outputRange: [1, 0.74] }) }],
-              },
-            ]}
-          >
-            {selectedProfile.name.slice(0, 1)}
-          </Animated.Text>
+          {selectedProfile?.avatarUri ? (
+            <Animated.Image
+              source={{ uri: selectedProfile.avatarUri }}
+              style={[styles.avatarImage, { opacity: avatarOpacity, transform: [{ scale: avatarScale }] }]}
+            />
+          ) : (
+            <Animated.Text
+              pointerEvents="none"
+              style={[
+                styles.avatarText,
+                {
+                  color: visible && !darkMode ? colors.inverseText : colors.text,
+                  opacity: avatarOpacity,
+                  transform: [{ scale: avatarScale }],
+                },
+              ]}
+            >
+              {profileInitial(selectedProfile?.name)}
+            </Animated.Text>
+          )}
           <Animated.Text
             pointerEvents="none"
             style={[
               styles.closeText,
               {
+                color: darkMode ? colors.text : colors.inverseText,
                 opacity: progress.interpolate({ inputRange: [0, 0.45, 1], outputRange: [0, 0, 1] }),
                 transform: [{ scale: progress.interpolate({ inputRange: [0, 1], outputRange: [0.72, 1] }) }],
               },
@@ -111,6 +155,7 @@ export function ProfileAvatarMenu({ navigation }: Props) {
             style={[
               styles.card,
               {
+                backgroundColor: colors.card,
                 opacity: progress,
                 transform: [
                   { translateY: progress.interpolate({ inputRange: [0, 1], outputRange: [-8, 0] }) },
@@ -125,19 +170,35 @@ export function ProfileAvatarMenu({ navigation }: Props) {
                 transform: [{ translateY: progress.interpolate({ inputRange: [0, 1], outputRange: [-3, 0] }) }],
               }}
             >
-              {PROFILE_OPTIONS.map((profile, index) => (
+              {profiles.map((profile, index) => (
                 <View key={profile.name}>
                   <Pressable style={styles.item} onPress={() => selectProfile(profile)}>
-                    <Text style={styles.icon}>{profile.name.slice(0, 1)}</Text>
-                    <View style={styles.itemTextWrap}>
-                      <Text style={styles.text}>{profile.name}</Text>
-                      <Text style={styles.detail}>{profile.detail}</Text>
+                    <View style={[styles.profileOptionAvatar, { backgroundColor: darkMode ? '#2a2a2f' : '#f1f1f1' }]}>
+                      {profile.avatarUri ? (
+                        <Image source={{ uri: profile.avatarUri }} style={styles.profileOptionAvatarImage} />
+                      ) : (
+                        <Text style={[styles.profileOptionAvatarText, { color: colors.text }]}>{profileInitial(profile.name)}</Text>
+                      )}
                     </View>
-                    {selectedProfile.name === profile.name ? <Text style={styles.check}>✓</Text> : null}
+                    <View style={styles.itemTextWrap}>
+                      <Text numberOfLines={1} style={[styles.text, { color: colors.text }]}>{profile.name}</Text>
+                      <Text style={[styles.detail, { color: colors.faintText }]}>{t(relationLabelKey(profile.relation))}</Text>
+                    </View>
+                    {selectedProfile?.id === profile.id ? <LineIcon name="check" size={16} color={colors.text} /> : null}
                   </Pressable>
-                  {index < PROFILE_OPTIONS.length - 1 ? <View style={styles.divider} /> : null}
+                  {index < profiles.length - 1 ? <View style={[styles.divider, { backgroundColor: colors.divider }]} /> : null}
                 </View>
               ))}
+              <View style={[styles.divider, { backgroundColor: colors.divider }]} />
+              <Pressable style={[styles.item, language === 'en' ? styles.manageItemEn : null]} onPress={() => navigation.navigate('ArchiveCenter')}>
+                <View style={styles.icon}>
+                  <LineIcon name="plus" size={language === 'en' ? 17 : 18} color={colors.text} />
+                </View>
+                <View style={styles.itemTextWrap}>
+                  <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.82} style={[styles.text, language === 'en' ? styles.manageTextEn : null, { color: colors.text }]}>{t('archive.manageTitle')}</Text>
+                  <Text numberOfLines={2} style={[styles.detail, language === 'en' ? styles.manageDetailEn : null, { color: colors.faintText }]}>{t('archive.manageSubtitle')}</Text>
+                </View>
+              </Pressable>
             </Animated.View>
           </Animated.View>
         ) : null}
@@ -162,6 +223,12 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   avatarButtonActive: { backgroundColor: '#000' },
+  avatarImage: {
+    position: 'absolute',
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+  },
   avatarText: {
     position: 'absolute',
     width: 40,
@@ -189,7 +256,7 @@ const styles = StyleSheet.create({
     position: 'absolute',
     left: 20,
     top: 106,
-    width: 170,
+    width: 190,
     borderRadius: 16,
     backgroundColor: '#fff',
     paddingVertical: 8,
@@ -200,10 +267,15 @@ const styles = StyleSheet.create({
     elevation: 8,
   },
   item: { height: 48, flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 14 },
-  icon: { width: 22, color: '#111', fontSize: 15, fontWeight: '900', textAlign: 'center' },
+  manageItemEn: { height: 58, alignItems: 'flex-start', paddingTop: 10, paddingBottom: 9 },
+  icon: { width: 22, alignItems: 'center', justifyContent: 'center' },
+  profileOptionAvatar: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
+  profileOptionAvatarImage: { width: 24, height: 24, borderRadius: 12 },
+  profileOptionAvatarText: { fontSize: 10, fontWeight: '900', lineHeight: 12 },
   itemTextWrap: { flex: 1 },
   text: { color: '#111', fontSize: 14, fontWeight: '900' },
   detail: { color: '#777', fontSize: 10, fontWeight: '700', marginTop: 2 },
-  check: { color: '#111', fontSize: 13, fontWeight: '900' },
+  manageTextEn: { fontSize: 13 },
+  manageDetailEn: { fontSize: 10, lineHeight: 13, marginTop: 3 },
   divider: { height: 1, backgroundColor: '#ededed', marginHorizontal: 12 },
 });

@@ -4,7 +4,7 @@ let database: SQLiteDatabase | null = null;
 
 export async function getDatabase() {
   if (!database) {
-    database = await openDatabaseAsync('liuyao.db');
+    database = await openDatabaseAsync('wenshi.db');
     await database.execAsync(`
       CREATE TABLE IF NOT EXISTS fortune_records (
         id TEXT PRIMARY KEY NOT NULL,

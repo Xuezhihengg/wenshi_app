@@ -1,13 +1,15 @@
 import { PropsWithChildren } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
+import { useAppTheme } from '../theme/AppTheme';
 
 type Props = PropsWithChildren<{ title: string; subtitle?: string }>;
 
 export function Section({ title, subtitle, children }: Props) {
+  const { colors } = useAppTheme();
   return (
-    <View style={styles.section}>
-      <Text style={styles.title}>{title}</Text>
-      {subtitle ? <Text style={styles.subtitle}>{subtitle}</Text> : null}
+    <View style={[styles.section, { borderColor: colors.border, backgroundColor: colors.card }]}>
+      <Text style={[styles.title, { color: colors.text }]}>{title}</Text>
+      {subtitle ? <Text style={[styles.subtitle, { color: colors.mutedText }]}>{subtitle}</Text> : null}
       <View style={styles.body}>{children}</View>
     </View>
   );
