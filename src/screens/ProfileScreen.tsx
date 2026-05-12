@@ -1,22 +1,24 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { useFocusEffect } from '@react-navigation/native';
+import { CommonActions, useFocusEffect } from '@react-navigation/native';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Alert, Animated, AppState, Easing, Image, Linking, Modal, PanResponder, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { clearStoredLogin, disableGuestMode, isGuestMode } from '../api/client';
+import { alertGuestRequiresLogin } from '../utils/guestPrompt';
 import { AppMoreMenu } from '../components/AppMoreMenu';
 import { LineIcon, LineIconName } from '../components/LineIcon';
 import { DivinationProfile } from '../domain/types';
 import { RootStackParamList } from '../navigation/types';
 import { addProfile, listProfiles, profileInitial } from '../storage/profileStore';
-import { getUserProfile, UserProfile } from '../storage/userProfileStore';
+import { listRecords } from '../storage/recordStore';
+import { clearLocalUserProfile, getUserProfile, syncUserProfileFromSelfArchive, UserProfile } from '../storage/userProfileStore';
 import { DEFAULT_NOTIFICATION_SETTINGS, getNotificationSettings, NotificationSettings, saveNotificationSettings } from '../storage/notificationSettingsStore';
 import { useAppTheme } from '../theme/AppTheme';
 import { AppLanguage, TranslationKey, useAppLanguage } from '../i18n/AppLanguage';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Profile'>;
 type LayoutBox = { x: number; y: number; width: number; height: number };
-
-const USER_TYPE: '体验用户' | '会员' = '体验用户';
+type ProfileStats = { castCount: number; fulfilledCount: number };
 
 type NotificationPermissionResponse = {
   granted?: boolean;
@@ -30,14 +32,12 @@ type NotificationsModule = {
 };
 
 function getNotificationsModule(): NotificationsModule | undefined {
-  try {
-    // Optional native module: old development builds may not include expo-notifications yet.
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    return require('expo-notifications') as NotificationsModule;
-  } catch (error) {
-    console.warn('Notifications native module unavailable in this build.', error);
-    return undefined;
-  }
+  return undefined;
+}
+
+function latestRecordFulfilled(record: { verificationNotes?: Array<{ fulfilled: boolean; createdAt: string }> }) {
+  const latestNote = [...(record.verificationNotes ?? [])].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0];
+  return Boolean(latestNote?.fulfilled);
 }
 
 function notificationGranted(permissions: NotificationPermissionResponse, notifications?: NotificationsModule) {
@@ -56,6 +56,7 @@ const SETTING_ITEMS: MenuItem[] = [
   { key: 'notifications', icon: 'bell', labelKey: 'profile.notifications' },
   { key: 'darkMode', icon: 'moon', labelKey: 'profile.darkMode' },
   { key: 'language', icon: 'language', labelKey: 'profile.language' },
+  { key: 'feedback', icon: 'message', labelKey: 'profile.feedback' },
   { key: 'about', icon: 'info', labelKey: 'profile.about' },
 ];
 const QUIET_TIME_OPTIONS = Array.from({ length: 24 }, (_, index) => `${index.toString().padStart(2, '0')}:00`);
@@ -400,6 +401,8 @@ export function ProfileScreen({ navigation }: Props) {
   const { language, setLanguage, t } = useAppLanguage();
   const [profiles, setProfiles] = useState<DivinationProfile[]>([]);
   const [userProfile, setUserProfile] = useState<UserProfile>();
+  const [profileStats, setProfileStats] = useState<ProfileStats>({ castCount: 0, fulfilledCount: 0 });
+  const [guestMode, setGuestMode] = useState(false);
   const [notificationModalVisible, setNotificationModalVisible] = useState(false);
   const [languageModalVisible, setLanguageModalVisible] = useState(false);
   const [notificationSettings, setNotificationSettings] = useState<NotificationSettings>(DEFAULT_NOTIFICATION_SETTINGS);
@@ -433,9 +436,16 @@ export function ProfileScreen({ navigation }: Props) {
   ).current;
 
   const refreshProfiles = async () => {
-    const [nextProfiles, nextUserProfile] = await Promise.all([listProfiles(), getUserProfile()]);
+    const [nextProfiles, records, nextGuestMode] = await Promise.all([listProfiles(), listRecords(), isGuestMode()]);
+    const selfProfile = nextProfiles.find((profile) => profile.id === 'self' || profile.relation === '本人');
+    const nextUserProfile = selfProfile ? await syncUserProfileFromSelfArchive(selfProfile) : await getUserProfile();
     setProfiles(nextProfiles);
     setUserProfile(nextUserProfile);
+    setGuestMode(nextGuestMode);
+    setProfileStats({
+      castCount: records.length,
+      fulfilledCount: records.filter((record) => latestRecordFulfilled(record)).length,
+    });
   };
 
   const refreshNotificationState = async () => {
@@ -555,6 +565,38 @@ export function ProfileScreen({ navigation }: Props) {
     navigation.navigate('ArchiveCenter', { profileId: profile.id });
   };
 
+  const goToLoginFresh = async () => {
+    await Promise.all([clearStoredLogin(), disableGuestMode()]);
+    navigation.dispatch(CommonActions.reset({ index: 0, routes: [{ name: 'Login' }] }));
+  };
+
+  const handleMemberCenterPress = async () => {
+    if (await isGuestMode()) {
+      alertGuestRequiresLogin('membership', t, goToLoginFresh);
+      return;
+    }
+    navigation.navigate('MemberCenter');
+  };
+
+  const handleLogout = () => {
+    Alert.alert(t('profile.logout'), t('profile.logoutConfirm'), [
+      { text: t('common.cancel'), style: 'cancel' },
+      {
+        text: t('profile.logout'),
+        style: 'destructive',
+        onPress: async () => {
+          await Promise.all([clearStoredLogin(), clearLocalUserProfile(), disableGuestMode()]);
+          navigation.dispatch(
+            CommonActions.reset({
+              index: 0,
+              routes: [{ name: 'Login' }],
+            })
+          );
+        },
+      },
+    ]);
+  };
+
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
       <View style={styles.edgeBackGestureArea} {...edgeBackPanResponder.panHandlers} />
@@ -583,8 +625,8 @@ export function ProfileScreen({ navigation }: Props) {
             <View style={styles.userInfo}>
               <Text style={[styles.userName, { color: colors.text }]}>{userProfile?.nickname || t('profile.unnamed')}</Text>
               <View style={styles.userTypeRow}>
-                <LineIcon name={USER_TYPE === '会员' ? 'crown' : 'user'} size={12} color="#777" stroke={1.6} />
-                <Text style={[styles.userType, { color: colors.faintText }]}>{USER_TYPE === '会员' ? t('profile.member') : t('profile.guest')}</Text>
+                <LineIcon name="user" size={12} color="#777" stroke={1.6} />
+                <Text style={[styles.userType, { color: colors.faintText }]}>{guestMode ? t('profile.guest') : t('profile.normal')}</Text>
               </View>
             </View>
             <Pressable style={[styles.editButton, { backgroundColor: colors.control }]} onPress={() => navigation.navigate('ProfileEdit')}>
@@ -595,44 +637,25 @@ export function ProfileScreen({ navigation }: Props) {
           <Pressable
             style={[
               styles.memberBanner,
-              USER_TYPE === '会员'
-                ? { backgroundColor: colors.greenSoft }
-                : null,
             ]}
-            onPress={() => navigation.navigate('MemberCenter')}
+            onPress={handleMemberCenterPress}
           >
-            {USER_TYPE === '会员' ? (
-              <>
-                <View style={[styles.memberPlanIcon, { backgroundColor: colors.inverse }]}>
-                  <LineIcon name="crown" size={20} color={colors.inverseText} />
-                </View>
-                <View style={styles.memberPlanTextWrap}>
-                  <Text style={[styles.memberPlanLabel, { color: colors.faintText }]}>{t('member.identityTitle')}</Text>
-                  <Text style={[styles.memberPlanTitle, { color: colors.text }]}>{t('member.planMonthly')}</Text>
-                  <Text style={[styles.memberPlanSubtitle, { color: colors.mutedText }]}>{t('profile.memberActiveSubtitle')}</Text>
-                </View>
-                <Text style={[styles.memberArrow, { color: colors.text }]}>›</Text>
-              </>
-            ) : (
-              <>
-                <View>
-                  <Text style={styles.memberTitle}>{t('profile.memberBanner')}</Text>
-                  <Text style={styles.memberSubtitle}>{t('profile.memberSubtitle')}</Text>
-                </View>
-                <Text style={styles.memberArrow}>›</Text>
-              </>
-            )}
+            <View>
+              <Text style={styles.memberTitle}>{t('profile.memberBanner')}</Text>
+              <Text style={styles.memberSubtitle}>{t('profile.memberSubtitle')}</Text>
+            </View>
+            <Text style={styles.memberArrow}>›</Text>
           </Pressable>
 
           <View style={[styles.statDivider, { backgroundColor: colors.divider }]} />
           <View style={styles.statsRow}>
             <Pressable style={styles.statItem} onPress={() => navigation.navigate('Save', { initialFilter: 'all' })}>
-              <Text style={[styles.statValue, { color: colors.text }]}>0</Text>
+              <Text style={[styles.statValue, { color: colors.text }]}>{profileStats.castCount}</Text>
               <Text style={[styles.statLabel, { color: colors.mutedText }]}>{t('profile.castCount')}</Text>
             </Pressable>
             <View style={[styles.verticalDivider, { backgroundColor: colors.divider }]} />
             <Pressable style={styles.statItem} onPress={() => navigation.navigate('Save', { initialFilter: 'fulfilled' })}>
-              <Text style={[styles.statValue, { color: colors.text }]}>0</Text>
+              <Text style={[styles.statValue, { color: colors.text }]}>{profileStats.fulfilledCount}</Text>
               <Text style={[styles.statLabel, { color: colors.mutedText }]}>{t('profile.fulfilledCount')}</Text>
             </Pressable>
           </View>
@@ -646,7 +669,7 @@ export function ProfileScreen({ navigation }: Props) {
             title={t('profile.memberCenter')}
             subtitle={t('profile.memberEntrySubtitle')}
             accent={darkMode ? '#3a301b' : '#fff0cc'}
-            onPress={() => navigation.navigate('MemberCenter')}
+            onPress={handleMemberCenterPress}
           />
           <QuickEntryCard
             icon="user"
@@ -669,6 +692,7 @@ export function ProfileScreen({ navigation }: Props) {
           onItemPress={(key) => {
             if (key === 'notifications') setNotificationModalVisible(true);
             if (key === 'language') setLanguageModalVisible(true);
+            if (key === 'feedback') navigation.navigate('Feedback');
             if (key === 'about') navigation.navigate('About');
           }}
           rightAccessory={(key) => (
@@ -678,7 +702,7 @@ export function ProfileScreen({ navigation }: Props) {
           )}
         />
 
-        <Pressable style={[styles.logoutCard, { backgroundColor: colors.card }]}>
+        <Pressable style={[styles.logoutCard, { backgroundColor: colors.card }]} onPress={handleLogout}>
           <Text style={styles.logoutText}>{t('profile.logout')}</Text>
         </Pressable>
       </ScrollView>

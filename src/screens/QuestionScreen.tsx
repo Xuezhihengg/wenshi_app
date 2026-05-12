@@ -13,78 +13,146 @@ import { useAppLanguage } from '../i18n/AppLanguage';
 type Props = NativeStackScreenProps<RootStackParamList, 'Question'>;
 const FLOATING_QUESTION_TEXTS_ZH = [
   // 感情婚姻类
-  '他会主动联系我吗？', '我们的缘分有多深？', '这段感情有未来吗？', 'ta是真的爱我吗？', 
+  '他会主动联系我吗？', '我们的缘分有多深？', '这段感情有未来吗？', 'ta是真的爱我吗？',
   '何时能遇到正缘？', '该不该分手？', '前任会回头吗？', '婚姻能幸福长久吗？',
   '相亲对象适合我吗？', '异地恋会有结果吗？', 'ta心里在想什么？', '会有第三者介入吗？',
   '今年能脱单吗？', '我们的性格合得来吗？', '这段感情有隐瞒吗？', '该不该复合？',
-  
+  '他真的对我有意思吗？', '现在表白合适吗？', '能等到他回来吗？', '这段暧昧能开花结果吗？',
+  '何时能再相遇？', '彼此还有可能吗？', '这次告白会被接受吗？', '感情中有诚意吗？',
+  '我会被对方家人接纳吗？', '婚后生活会和谐吗？', '会和现在的人结婚吗？', '会被冷落吗？',
+  '能修成正果吗？', '心里到底有没有我？', '感情会反复吗？', '这是命中的人吗？',
+  '我们能走到最后吗？', '我会被珍惜吗？', '今晚他会回我吗？', '这次见面顺利吗？',
+  '关系会更进一步吗？', '感情中谁更主动？', '心里还放不下旧情吗？', '复合后能稳定吗？',
+
   // 事业财运类
   '工作会有变动吗？', '这个项目能成功吗？', '该不该换工作？', '创业能成功吗？',
   '面试能通过吗？', '升职加薪有机会吗？', '同事值得信任吗？', '老板会赏识我吗？',
   '这份合作能成吗？', '副业能赚钱吗？', '投资能获利吗？', '欠款能要回吗？',
   '生意能好转吗？', '这个客户能谈下吗？', '财运何时能好转？', '今年能存下钱吗？',
   '这个行业有前景吗？', '该不该合伙？', '工作压力能减轻吗？', '跳槽时机到了吗？',
-  
+  '这单生意能签下吗？', '订单何时回款？', '这次涨价对生意有利吗？', '股市还会涨吗？',
+  '基金该不该止盈？', '楼市还能涨吗？', '这次调岗对我好吗？', '老板会兑现承诺吗？',
+  '这个 offer 值得接吗？', '考公能成功上岸吗？', '体制内适合我吗？', '辞职后有出路吗？',
+  '这次出差顺利吗？', '汇报能让领导满意吗？', '年终奖会发多少？', '裁员会波及到我吗？',
+  '同事在背后说我吗？', '这个 KPI 能完成吗？', '能否承接这个大单？', '这次涨薪幅度可观吗？',
+  '老客户会续约吗？', '能拓展到新市场吗？', '资金链会有问题吗？', '今年财运重点在哪里？',
+
   // 学业考试类
   '考试能顺利通过吗？', '这次面试能成功吗？', '该选哪个专业？', '学习成绩能提升吗？',
   '考研能上岸吗？', '考证能一次过吗？', '出国留学顺利吗？', '论文能通过吗？',
   '导师会喜欢我吗？', '这个学习方法适合我吗？', '考试能超常发挥吗？', '复习方向对吗？',
   '能考上理想的学校吗？', '学业压力能缓解吗？', '这个培训值得参加吗？', '竞赛能获奖吗？',
-  
+  '答辩能通过吗？', '推免能成功吗？', '英语能考到目标分吗？', '雅思托福能达标吗？',
+  '志愿能录到吗？', '调剂能成功吗？', '奖学金能拿到吗？', '这次月考能逆袭吗？',
+  '这次补习有效果吗？', '专升本能成功吗？', '编制能考上吗？', '夏令营能入营吗？',
+
   // 健康疾病类
   '病情能好转吗？', '这个治疗有效果吗？', '该不该做手术？', '身体能康复吗？',
   '这个医生靠谱吗？', '什么时候能痊愈？', '这个药对症吗？', '检查结果会好吗？',
   '是怀孕了吗？', '什么时候能怀孕？', '备孕要注意什么？', '心理健康能改善吗？',
   '这个养生方法适合我吗？', '疾病能根治吗？', '这个症状严重吗？', '该不该转院？',
-  
+  '失眠能改善吗？', '减肥能成功吗？', '复查指标会下降吗？', '这次复诊乐观吗？',
+  '焦虑何时能缓解？', '抑郁能走出来吗？', '老人家身体会好转吗？', '体检报告会异常吗？',
+  '这个偏方靠谱吗？', '辅助生殖能成功吗？', '试管这一次能着床吗？', '能顺利分娩吗？',
+
   // 人际关系类
   '这个朋友可信吗？', '和同事能处好吗？', '领导会针对我吗？', '这个贵人能帮到我吗？',
   '家人能理解我吗？', '这个误会能化解吗？', '小人会影响我吗？', '这个团队合作顺利吗？',
   '社交能带来机遇吗？', '这个人值得深交吗？', '人际关系能改善吗？', '这个矛盾能解决吗？',
   '朋友会背叛我吗？', '如何处理好关系？', '这个圈子适合我吗？', '能交到真朋友吗？',
-  
+  '父母关系能缓和吗？', '婆媳关系会和睦吗？', '室友能处得好吗？', '这次聚会顺利吗？',
+  '老朋友会回来找我吗？', '邻里关系会改善吗？', '兄弟姐妹会反目吗？', '亲戚来往会增加吗？',
+
   // 决策选择类
   '该选A还是选B？', '现在该行动吗？', '这个决定正确吗？', '时机成熟了吗？',
   '应该坚持还是放弃？', '这个风险值得冒吗？', '这个方向对吗？', '该不该相信直觉？',
   '这个计划可行吗？', '现在该等待吗？', '这个机会要抓住吗？', '这个承诺能信吗？',
   '这个建议该采纳吗？', '这个诱惑要拒绝吗？', '这个尝试值得吗？', '这个改变是时候吗？',
-  
+  '该走还是该留？', '该说还是该忍？', '该让步还是坚持立场？', '该投资还是观望？',
+  '该签还是再考虑？', '该公开还是保密？', '主动出击还是后发制人？', '速战速决还是慢慢谈？',
+
   // 生活日常类
   '丢失的东西能找到吗？', '出行顺利安全吗？', '这个房子能买吗？', '租房能顺利吗？',
   '搬家是好时机吗？', '这个物品该买吗？', '旅行能开心吗？', '这个宠物适合我吗？',
   '今天会有好运吗？', '这个日子适合办事吗？', '这个梦是什么意思？', '家里会有喜事吗？',
   '这个习惯要改变吗？', '这个爱好要坚持吗？', '这个变化是好事吗？', '今年能实现目标吗？',
-  
+  '丢失的钱包能找回吗？', '宠物走失能回家吗？', '快递能按时送达吗？', '航班会延误吗？',
+  '这次航海/远行平安吗？', '车子能顺利过户吗？', '装修能如期完工吗？', '这次乔迁吉利吗？',
+
   // 特殊时机类
   '本命年要注意什么？', '犯太岁怎么办？', '水逆会影响我吗？', '什么时候转运？',
   '流年运势如何？', '这个月份顺利吗？', '今天适合做什么？', '这个时辰吉利吗？',
   '犯小人怎么化解？', '财运方位在哪里？', '桃花运何时来？', '贵人何时出现？',
   '什么时候有转机？', '这个阶段能突破吗？', '低谷期还有多久？', '何时能心想事成？',
-  
+  '这一波运势何时见底？', '这个节气适合做事吗？', '这次出门方位好吗？', '何时能逢凶化吉？',
+  '阴历这个月利月吗？', '本周宜签合同吗？', '今年会不会破财？', '今年有没有官非？',
+
   // 玄学命理类
   '八字合不合？', '姓名吉利吗？', '风水有问题吗？', '手相有玄机吗？',
   '面相如何解读？', '这个卦象怎么看？', '这个签文何解？', '这个占卜准确吗？',
   '命中有财库吗？', '姻缘天注定吗？', '事业有贵人吗？', '健康有隐患吗？',
   '寿命有多长？', '子女缘如何？', '父母健康吗？', '祖上保佑吗？',
-  
+  '紫微斗数怎么看？', '塔罗的指引是什么？', '这签求得灵不灵？', '这个梦兆好吗？',
+
   // 综合运势类
   '今年的整体运势？', '下个月的运气如何？', '本周会有好事吗？', '今天宜忌是什么？',
   '什么时候能转运？', '这个月能突破吗？', '近期会有意外收获吗？', '什么时候能安定？',
   '人生方向在哪里？', '使命是什么？', '潜能如何发挥？', '天赋在哪里？',
-  '什么阻碍了发展？', '需要提升什么？', '如何改变现状？', '怎样才能更幸福？'
+  '什么阻碍了发展？', '需要提升什么？', '如何改变现状？', '怎样才能更幸福？',
+  '今年最该把握的机会是？', '下半年要注意什么？', '近三个月最旺什么？', '生活会出现转机吗？',
+  '内心真正想要的是什么？', '该如何放下执念？', '能与过去和解吗？', '人生还有多大可能？'
 ];
 const FLOATING_QUESTION_TEXTS_EN = [
+  // Love & marriage
   'Will they contact me?', 'Is this relationship right?', 'Will we reconcile?', 'When will love arrive?',
+  'Should we break up?', 'Is there a hidden third party?', 'Can long distance work for us?',
+  'Will the marriage be lasting?', 'Is the blind date a good match?', 'Will I be single this year?',
+  'Should I confess my feelings?', 'Will the ex come back?', 'Are we meant to be?',
+  'Will the proposal be accepted?', 'Will the in-laws accept me?', 'Will the relationship deepen?',
+  'Is there real sincerity here?', 'Will we reunite again?', 'Should we get back together?',
+  'Will tonight go well between us?', 'Will the next meeting go smoothly?', 'Who cares more in this love?',
+  'Is there still hope between us?', 'Will I be cherished?', 'Are they truly into me?',
+  // Work & money
   'Should I change jobs?', 'Will this project work?', 'Can I pass the interview?', 'Is this partner reliable?',
   'Will my finances improve?', 'Can I recover the debt?', 'Is this investment wise?', 'Should I start a business?',
+  'Will I get promoted this year?', 'Will the raise come through?', 'Should I take this offer?',
+  'Will the deal close?', 'Will the client sign?', 'Will my boss reward my effort?',
+  'Will the bonus be generous?', 'Will layoffs reach me?', 'Should I switch industries?',
+  'Will the side hustle pay off?', 'Will the contract be renewed?', 'Will the funding round succeed?',
+  'Should I quit and freelance?', 'Will the cash flow hold up?',
+  // Study & exams
   'Will the exam go well?', 'Can I pass the certification?', 'Is this major right?', 'Will my thesis pass?',
+  'Will I get into my dream school?', 'Will the application be accepted?', 'Will I pass the defense?',
+  'Will the scholarship come through?', 'Will my IELTS score reach the goal?', 'Will the research go well?',
+  'Will I get the recommendation letter?', 'Will the visa be approved?',
+  // Health
   'Will my health improve?', 'Is this treatment effective?', 'Should I have surgery?', 'When will I recover?',
+  'Will the test results be good?', 'Will the diagnosis be reassuring?', 'Will the operation go smoothly?',
+  'Should I switch hospitals?', 'Will my insomnia ease?', 'Am I pregnant?',
+  'Will the IVF round succeed?', 'Will the elder recover?',
+  // Relationships
   'Can this conflict resolve?', 'Is this friend trustworthy?', 'Will my family understand?', 'Is there a hidden rival?',
+  'Will the misunderstanding clear up?', 'Will roommate life work out?', 'Will the partnership last?',
+  'Will I find true friends?', 'Will the team work well together?', 'Will the gathering be smooth?',
+  // Choices
   'Should I choose A or B?', 'Is now the right time?', 'Should I wait?', 'Is this opportunity worth it?',
+  'Should I stay or leave?', 'Should I speak up or hold back?', 'Should I push or pull back?',
+  'Should I sign or rethink?', 'Should I disclose or stay quiet?',
+  // Daily life
   'Can the lost item return?', 'Will this trip be safe?', 'Is this house suitable?', 'Should I move now?',
+  'Will the lost wallet come back?', 'Will the missing pet return home?', 'Will the package arrive on time?',
+  'Will the flight be on time?', 'Will the renovation finish in time?',
+  // Timing & destiny
   'Will luck turn around?', 'What should I focus on?', 'Is this month favorable?', 'When will things settle?',
+  'When will the slump end?', 'Will I weather this storm?', 'Will this year bring fortune?',
+  'When will the noble person appear?', 'When will romance arrive?',
+  // Mystery / fate
   'Is my name auspicious?', 'Does the feng shui fit?', 'What does this dream mean?', 'Will noble help appear?',
-  'What blocks my progress?', 'How can I improve?', 'What is my direction?', 'Will my wish come true?'
+  'Is the bazi a good match?', 'Is this omen positive?', 'What is my life direction?',
+  // Overall
+  'What blocks my progress?', 'How can I improve?', 'What is my direction?', 'Will my wish come true?',
+  'What is the biggest opportunity this year?', 'Where should I focus next quarter?',
+  'How do I let go of the past?', 'Can I make peace with what was?', 'What does my heart truly want?'
 ];
 const FLOATING_QUESTION_COUNT = 10;
 const FLOATING_LAYER_WIDTH = 320;
@@ -993,7 +1061,7 @@ const styles = StyleSheet.create({
   blackQuestionText: { position: 'absolute', color: '#000' },
   button: {
     height: 52,
-    borderRadius: 6,
+    borderRadius: 10,
     backgroundColor: '#000',
     alignItems: 'center',
     justifyContent: 'center',

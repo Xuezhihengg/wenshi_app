@@ -1,6 +1,8 @@
 import { FortuneRecord } from '../domain/types';
 
 export type RootStackParamList = {
+  Login: undefined;
+  ProfileSetup: { fresh?: boolean } | undefined;
   Question: undefined;
   Cast: { question: string; profile?: FortuneRecord['profile'] };
   Analysis: { record: FortuneRecord; fromHistory?: boolean };
@@ -12,6 +14,7 @@ export type RootStackParamList = {
   PhoneBind: undefined;
   EmailBind: undefined;
   Settings: undefined;
+  Feedback: undefined;
   About: undefined;
   MemberCenter: undefined;
 };

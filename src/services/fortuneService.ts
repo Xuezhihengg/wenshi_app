@@ -1,6 +1,16 @@
 import { analyzeHexagram, buildLunarInfo, createAiPrompt, generateHexagram } from '../utils/fortune';
 import { AnalysisResult, FortuneRecord } from '../domain/types';
 
+export function createRecordId() {
+  const cryptoObject = globalThis.crypto as { randomUUID?: () => string } | undefined;
+  if (cryptoObject?.randomUUID) return cryptoObject.randomUUID();
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (char) => {
+    const random = Math.floor(Math.random() * 16);
+    const value = char === 'x' ? random : (random & 0x3) | 0x8;
+    return value.toString(16);
+  });
+}
+
 function randomLineStrength(): 6 | 7 | 8 | 9 {
   const roll = Math.floor(Math.random() * 16) + 1;
   if (roll <= 1) return 6;
@@ -16,7 +26,7 @@ export function createFortuneRecord(question: string, aiReading?: string): Fortu
   const hexagram = generateHexagram(strengths, lunarInfo);
   const analysis: AnalysisResult = analyzeHexagram(question, hexagram, lunarInfo);
   return {
-    id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    id: createRecordId(),
     question,
     createdAt: castAt.toISOString(),
     hexagram,

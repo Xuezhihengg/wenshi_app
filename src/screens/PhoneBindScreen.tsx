@@ -1,12 +1,12 @@
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { useEffect, useRef, useState } from 'react';
 import { Alert, Animated, Easing, Keyboard, PanResponder, Pressable, SafeAreaView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { bindAccount, sendBindCode } from '../api/client';
 import { RootStackParamList } from '../navigation/types';
 import { useAppTheme } from '../theme/AppTheme';
 import { useAppLanguage } from '../i18n/AppLanguage';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'PhoneBind'>;
-const MOCK_CODE = '123456';
 
 export function PhoneBindScreen({ navigation }: Props) {
   const { colors } = useAppTheme();
@@ -18,6 +18,7 @@ export function PhoneBindScreen({ navigation }: Props) {
   const [message, setMessage] = useState('');
   const [bound, setBound] = useState(false);
   const [codeStage, setCodeStage] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
   const textStageOpacity = useRef(new Animated.Value(1)).current;
   const buttonEnabledProgress = useRef(new Animated.Value(0)).current;
   const edgeBackPanResponder = useRef(
@@ -49,7 +50,7 @@ export function PhoneBindScreen({ navigation }: Props) {
   const inputPlaceholder = codeStage ? t('bind.codePlaceholder') : t('bind.phonePlaceholder');
   const keyboardType = codeStage ? 'number-pad' : 'phone-pad';
   const inputMaxLength = codeStage ? 6 : 11;
-  const buttonDisabled = codeStage ? !canBind : !canSendCode;
+  const buttonDisabled = submitting || (codeStage ? !canBind : !canSendCode);
   const buttonText = codeStage ? (bound ? t('common.enabled') : t('common.confirm')) : t('bind.code');
   const maskedPhone = phone.trim().replace(/^(\d{3})\d{4}(\d{4})$/, '$1****$2');
   const buttonBackgroundColor = buttonEnabledProgress.interpolate({
@@ -72,58 +73,87 @@ export function PhoneBindScreen({ navigation }: Props) {
     }).start();
   }, [buttonDisabled, buttonEnabledProgress]);
 
-  const sendCode = () => {
+  const friendlyError = (error: unknown) => {
+    const raw = error instanceof Error ? error.message : String(error);
+    if (raw.includes('429')) return '验证码发送太频繁，请稍后再试。';
+    if (raw.includes('409')) return '这个手机号已经被注册过了。';
+    if (raw.includes('502')) return '短信服务暂时不可用，请稍后再试。';
+    return '请求失败，请稍后再试。';
+  };
+
+  const sendCode = async () => {
     if (!canSendCode) {
       setMessage(phone.trim() ? '请输入正确的 11 位手机号。' : '请先输入手机号。');
       return;
     }
-    textStageOpacity.stopAnimation();
-    Animated.timing(textStageOpacity, {
-      toValue: 0,
-      duration: 130,
-      easing: Easing.out(Easing.cubic),
-      useNativeDriver: false,
-    }).start(() => {
-      setMessage('');
-      setCodeStage(true);
-      setCode('');
-      setBound(false);
-      setCountdown(60);
+    setSubmitting(true);
+    try {
+      const response = await sendBindCode(phone.trim(), 'phone');
+      const nextCountdown = Math.min(60, Math.max(1, response.expires_in_seconds || 60));
+      textStageOpacity.stopAnimation();
       Animated.timing(textStageOpacity, {
-        toValue: 1,
-        duration: 190,
+        toValue: 0,
+        duration: 130,
         easing: Easing.out(Easing.cubic),
         useNativeDriver: false,
-      }).start();
-    });
+      }).start(() => {
+        setMessage('');
+        setCodeStage(true);
+        setCode('');
+        setBound(false);
+        setCountdown(nextCountdown);
+        Animated.timing(textStageOpacity, {
+          toValue: 1,
+          duration: 190,
+          easing: Easing.out(Easing.cubic),
+          useNativeDriver: false,
+        }).start();
+      });
+    } catch (error) {
+      setMessage(friendlyError(error));
+    } finally {
+      setSubmitting(false);
+    }
   };
 
-  const bindPhone = () => {
+  const bindPhone = async () => {
     if (!canBind) {
-      Alert.alert('验证码有误', '请输入 6 位验证码。');
+      Alert.alert(t('bind.invalidCodeTitle'), t('bind.invalidCodeBody'));
       return;
     }
-    if (code.trim() !== MOCK_CODE) {
-      Alert.alert('验证码有误', '验证码不正确，请重新输入。');
-      return;
+    setSubmitting(true);
+    try {
+      await bindAccount(phone.trim(), 'phone', code.trim());
+      setBound(true);
+      setMessage('');
+      Keyboard.dismiss();
+      Alert.alert(t('bind.phoneSuccessTitle'), t('bind.phoneSuccessBody'), [
+        {
+          text: t('common.ok'),
+          onPress: () => navigation.goBack(),
+        },
+      ]);
+    } catch (error) {
+      setMessage(error instanceof Error && error.message.includes('401') ? '验证码不正确或已过期。' : friendlyError(error));
+    } finally {
+      setSubmitting(false);
     }
-    setBound(true);
-    setMessage('');
-    Keyboard.dismiss();
-    Alert.alert('绑定成功', '手机号已绑定。', [
-      {
-        text: '好的',
-        onPress: () => navigation.goBack(),
-      },
-    ]);
   };
 
-  const resendCode = () => {
+  const resendCode = async () => {
     if (!codeStage || countdown > 0) return;
-    setMessage('');
-    setCode('');
-    setBound(false);
-    setCountdown(60);
+    setSubmitting(true);
+    try {
+      const response = await sendBindCode(phone.trim(), 'phone');
+      setMessage('');
+      setCode('');
+      setBound(false);
+      setCountdown(Math.min(60, Math.max(1, response.expires_in_seconds || 60)));
+    } catch (error) {
+      setMessage(friendlyError(error));
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   const changePhone = () => {

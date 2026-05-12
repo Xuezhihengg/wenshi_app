@@ -1,7 +1,7 @@
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRef } from 'react';
-import { Animated, PanResponder, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import { Alert, Animated, PanResponder, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { LineIcon, LineIconName } from '../components/LineIcon';
 import { useAppLanguage } from '../i18n/AppLanguage';
 import { RootStackParamList } from '../navigation/types';
@@ -43,7 +43,7 @@ const MANAGE_ITEMS: Array<{ icon: LineIconName; titleKey: 'member.agreement' | '
   { icon: 'mail', titleKey: 'member.support' },
 ];
 
-function PlanCard({ plan, index }: { plan: Plan; index: number }) {
+function PlanCard({ plan, index, onOpen }: { plan: Plan; index: number; onOpen: () => void }) {
   const { darkMode, colors } = useAppTheme();
   const { t } = useAppLanguage();
   const current = plan.key === 'free';
@@ -52,6 +52,12 @@ function PlanCard({ plan, index }: { plan: Plan; index: number }) {
   const accent = darkMode
     ? ['#172554', '#063f2d', '#4a2b05'][index]
     : ['#dbeafe', '#d1fae5', '#ffedd5'][index];
+  const buttonColor = darkMode
+    ? ['#2563eb', '#059669', '#d97706'][index]
+    : ['#93c5fd', '#86efac', '#fdba74'][index];
+  const buttonTextColor = darkMode
+    ? '#ffffff'
+    : ['#1e3a8a', '#14532d', '#7c2d12'][index];
 
   return (
     <View style={[styles.planCard, { height: recommended ? PLAN_CARD_HEIGHT : PLAN_SIDE_CARD_HEIGHT, backgroundColor: accent }]}>
@@ -77,6 +83,9 @@ function PlanCard({ plan, index }: { plan: Plan; index: number }) {
           </View>
         ))}
       </View>
+      <Pressable style={[styles.openButton, { backgroundColor: buttonColor }]} onPress={onOpen}>
+        <Text style={[styles.openButtonText, { color: buttonTextColor }]}>{t('member.openNow')}</Text>
+      </Pressable>
     </View>
   );
 }
@@ -121,6 +130,9 @@ export function MemberCenterScreen({ navigation }: Props) {
       },
     })
   ).current;
+  const showPaymentUnavailable = () => {
+    Alert.alert(t('member.paymentUnavailableTitle'), t('member.paymentUnavailableBody'));
+  };
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
@@ -166,7 +178,7 @@ export function MemberCenterScreen({ navigation }: Props) {
           disableIntervalMomentum
           contentContainerStyle={[styles.planScroll, { paddingHorizontal: planSidePadding }]}
         >
-          {PLANS.map((plan, index) => <PlanCard key={plan.key} plan={plan} index={index} />)}
+          {PLANS.map((plan, index) => <PlanCard key={plan.key} plan={plan} index={index} onOpen={showPaymentUnavailable} />)}
         </ScrollView>
 
         <View style={[styles.manageCard, { backgroundColor: colors.card }]}>
@@ -225,7 +237,7 @@ const styles = StyleSheet.create({
     paddingVertical: 24,
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 70,
+    gap: 34,
   },
   planIntroArea: { width: '100%', alignItems: 'center', justifyContent: 'center', gap: 36 },
   planIconBubble: { height: 52, alignItems: 'center', justifyContent: 'center' },
@@ -238,6 +250,8 @@ const styles = StyleSheet.create({
   perkRow: { width: '100%', flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-start', gap: 8 },
   perkDot: { width: 6, height: 7, borderRadius: 3, backgroundColor: '#111' },
   perkText: { flex: 1, color: '#555', fontSize: 13, fontWeight: '800', lineHeight: 20, textAlign: 'left' },
+  openButton: { width: '100%', height: 46, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
+  openButtonText: { fontSize: 15, fontWeight: '900' },
   manageCard: { ...CARD_SHADOW, marginHorizontal: 18, borderRadius: 22, backgroundColor: '#fff', paddingTop: 15, overflow: 'hidden' },
   cardTitle: { color: '#111', fontSize: 15, fontWeight: '900', paddingHorizontal: 16, marginBottom: 2 },
   divider: { height: 1, backgroundColor: '#ededed', marginLeft: 16 },

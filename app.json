@@ -14,7 +14,7 @@
     },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.anonymous.wenshi-app",
+      "bundleIdentifier": "com.xuezhihengg.wenshi",
       "infoPlist": {
         "NSCameraUsageDescription": "问事需要访问相机，用于拍摄并设置个人头像。",
         "NSPhotoLibraryUsageDescription": "问事需要访问相册，用于选择并设置个人头像。",
@@ -22,6 +22,8 @@
       }
     },
     "android": {
+      "package": "com.xuezhihengg.wenshi",
+      "versionCode": 1,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"

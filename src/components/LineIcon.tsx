@@ -21,13 +21,16 @@ export type LineIconName =
   | 'calendar'
   | 'phone'
   | 'mail'
+  | 'atSign'
   | 'wechat'
   | 'apple'
+  | 'google'
   | 'lock'
   | 'shield'
   | 'tag'
   | 'camera'
   | 'image'
+  | 'message'
   | 'search'
   | 'star'
   | 'plus'
@@ -61,13 +64,16 @@ const FEATHER_ICON_MAP: Record<LineIconName, keyof typeof Feather.glyphMap> = {
   calendar: 'calendar',
   phone: 'phone',
   mail: 'mail',
+  atSign: 'at-sign',
   wechat: 'message-circle',
   apple: 'smartphone',
+  google: 'chrome',
   lock: 'lock',
   shield: 'shield',
   tag: 'tag',
   camera: 'camera',
   image: 'image',
+  message: 'message-square',
   search: 'search',
   star: 'star',
   plus: 'plus',

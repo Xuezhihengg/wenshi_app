@@ -8,7 +8,7 @@ import { AppMoreMenu } from '../components/AppMoreMenu';
 import { LineIcon, LineIconName } from '../components/LineIcon';
 import { FortuneRecord } from '../domain/types';
 import { RootStackParamList } from '../navigation/types';
-import { isPersistentStorageAvailable, listRecords, saveRecord } from '../storage/recordStore';
+import { isPersistentStorageAvailable, listRecords, saveRecord, toggleRecordFavorite as toggleStoredRecordFavorite } from '../storage/recordStore';
 import { profileInitial } from '../storage/profileStore';
 import { useAppTheme } from '../theme/AppTheme';
 import { TranslationKey, useAppLanguage } from '../i18n/AppLanguage';
@@ -274,8 +274,9 @@ export function SaveScreen({ route, navigation }: Props) {
   useEffect(() => {
     if (incomingFilter && incomingFilter !== activeFilter) {
       setActiveFilter(incomingFilter);
+      navigation.setParams({ initialFilter: undefined });
     }
-  }, [activeFilter, incomingFilter]);
+  }, [activeFilter, incomingFilter, navigation]);
 
   useFocusEffect(
     useCallback(() => {
@@ -349,9 +350,8 @@ export function SaveScreen({ route, navigation }: Props) {
   };
 
   const toggleRecordFavorite = async (record: FortuneRecord) => {
-    const updatedRecord = { ...record, favorite: !record.favorite };
+    const updatedRecord = await toggleStoredRecordFavorite(record);
     setRecords((current) => current.map((item) => (item.id === record.id ? updatedRecord : item)));
-    await saveRecord(updatedRecord);
   };
 
   return (

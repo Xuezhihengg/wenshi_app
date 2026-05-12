@@ -1,12 +1,12 @@
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { useEffect, useRef, useState } from 'react';
 import { Alert, Animated, Easing, Keyboard, PanResponder, Pressable, SafeAreaView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { bindAccount, sendBindCode } from '../api/client';
 import { RootStackParamList } from '../navigation/types';
 import { useAppTheme } from '../theme/AppTheme';
 import { useAppLanguage } from '../i18n/AppLanguage';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'EmailBind'>;
-const MOCK_CODE = '123456';
 
 export function EmailBindScreen({ navigation }: Props) {
   const { colors } = useAppTheme();
@@ -17,6 +17,8 @@ export function EmailBindScreen({ navigation }: Props) {
   const [countdown, setCountdown] = useState(0);
   const [bound, setBound] = useState(false);
   const [codeStage, setCodeStage] = useState(false);
+  const [message, setMessage] = useState('');
+  const [submitting, setSubmitting] = useState(false);
   const textStageOpacity = useRef(new Animated.Value(1)).current;
   const buttonEnabledProgress = useRef(new Animated.Value(0)).current;
   const emailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
@@ -27,7 +29,7 @@ export function EmailBindScreen({ navigation }: Props) {
   const inputPlaceholder = codeStage ? t('bind.codePlaceholder') : t('bind.emailPlaceholder');
   const keyboardType = codeStage ? 'number-pad' : 'email-address';
   const inputMaxLength = codeStage ? 6 : undefined;
-  const buttonDisabled = codeStage ? !canBind : !canSendCode;
+  const buttonDisabled = submitting || (codeStage ? !canBind : !canSendCode);
   const buttonText = codeStage ? (bound ? t('common.enabled') : t('common.confirm')) : t('bind.code');
   const maskedEmail = email.trim().replace(/^(.{1,3})(.*)(@.*)$/, (_, prefix: string, middle: string, suffix: string) => {
     if (!middle) return `${prefix}****${suffix}`;
@@ -92,43 +94,75 @@ export function EmailBindScreen({ navigation }: Props) {
     });
   };
 
-  const sendCode = () => {
+  const friendlyError = (error: unknown) => {
+    const raw = error instanceof Error ? error.message : String(error);
+    if (raw.includes('429')) return '验证码发送太频繁，请稍后再试。';
+    if (raw.includes('409')) return '这个邮箱已经被注册过了。';
+    if (raw.includes('502')) return '邮件服务暂时不可用，请稍后再试。';
+    return '请求失败，请稍后再试。';
+  };
+
+  const sendCode = async () => {
     if (!canSendCode) {
-      Alert.alert('邮箱格式有误', '请输入正确的邮箱地址。');
+      setMessage(email.trim() ? '请输入正确的邮箱地址。' : '请先输入邮箱。');
       return;
     }
-    fadeTextTo(() => {
-      setCodeStage(true);
+    setSubmitting(true);
+    try {
+      const response = await sendBindCode(email.trim(), 'email');
+      const nextCountdown = Math.min(60, Math.max(1, response.expires_in_seconds || 60));
+      fadeTextTo(() => {
+        setMessage('');
+        setCodeStage(true);
+        setCode('');
+        setBound(false);
+        setCountdown(nextCountdown);
+      });
+    } catch (error) {
+      setMessage(friendlyError(error));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const bindEmail = async () => {
+    if (!canBind) {
+      Alert.alert(t('bind.invalidCodeTitle'), t('bind.invalidCodeBody'));
+      return;
+    }
+    setSubmitting(true);
+    try {
+      await bindAccount(email.trim(), 'email', code.trim());
+      setBound(true);
+      setMessage('');
+      Keyboard.dismiss();
+      Alert.alert(t('bind.emailSuccessTitle'), t('bind.emailSuccessBody'), [
+        {
+          text: t('common.ok'),
+          onPress: () => navigation.goBack(),
+        },
+      ]);
+    } catch (error) {
+      setMessage(error instanceof Error && error.message.includes('401') ? '验证码不正确或已过期。' : friendlyError(error));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const resendCode = async () => {
+    if (!codeStage || countdown > 0) return;
+    setSubmitting(true);
+    try {
+      const response = await sendBindCode(email.trim(), 'email');
+      setMessage('');
       setCode('');
       setBound(false);
-      setCountdown(60);
-    });
-  };
-
-  const bindEmail = () => {
-    if (!canBind) {
-      Alert.alert('验证码有误', '请输入 6 位验证码。');
-      return;
+      setCountdown(Math.min(60, Math.max(1, response.expires_in_seconds || 60)));
+    } catch (error) {
+      setMessage(friendlyError(error));
+    } finally {
+      setSubmitting(false);
     }
-    if (code.trim() !== MOCK_CODE) {
-      Alert.alert('验证码有误', '验证码不正确，请重新输入。');
-      return;
-    }
-    setBound(true);
-    Keyboard.dismiss();
-    Alert.alert('绑定成功', '邮箱已绑定。', [
-      {
-        text: '好的',
-        onPress: () => navigation.goBack(),
-      },
-    ]);
-  };
-
-  const resendCode = () => {
-    if (!codeStage || countdown > 0) return;
-    setCode('');
-    setBound(false);
-    setCountdown(60);
   };
 
   const changeEmail = () => {
@@ -149,6 +183,7 @@ export function EmailBindScreen({ navigation }: Props) {
   };
 
   const handleInputChange = (value: string) => {
+    setMessage('');
     setBound(false);
     if (codeStage) {
       setCode(value);
@@ -212,6 +247,8 @@ export function EmailBindScreen({ navigation }: Props) {
             </Pressable>
           </View>
         ) : null}
+
+        {message ? <Text style={[styles.message, bound ? styles.successMessage : null]}>{message}</Text> : null}
       </View>
     </SafeAreaView>
   );
@@ -269,4 +306,6 @@ const styles = StyleSheet.create({
   sentInfoBlock: { alignItems: 'center', gap: 7, marginTop: 13 },
   sentInfoText: { color: '#1f7a3f', fontSize: 12, fontWeight: '900' },
   changeEmailText: { color: '#555', fontSize: 12, fontWeight: '900', textDecorationLine: 'underline' },
+  message: { color: '#c23a2b', fontSize: 12, fontWeight: '800', lineHeight: 18, marginTop: 12 },
+  successMessage: { color: '#1f7a3f' },
 });

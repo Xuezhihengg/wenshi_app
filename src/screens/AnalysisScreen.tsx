@@ -2,12 +2,15 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { FontAwesome } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
+import { Solar } from 'lunar-typescript';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Animated, Easing, Keyboard, LayoutAnimation, Modal, PanResponder, Pressable, ScrollView, Share, StyleSheet, Text, TextInput, UIManager, View, useWindowDimensions, type GestureResponderEvent } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LineIcon } from '../components/LineIcon';
+import { generateRemoteAIReading } from '../api/records';
+import { isGuestMode } from '../api/client';
 import { hexagramTextFor, type HexagramTextSection } from '../domain/hexagramTexts';
-import { HexagramLine, SpiritAnalysis, YinYang } from '../domain/types';
+import { AIReading, HexagramLine, SpiritAnalysis, UnionAnalysis, UnionLineRef, UnionPattern, YinYang } from '../domain/types';
 import { RootStackParamList } from '../navigation/types';
 import { saveRecord } from '../storage/recordStore';
 import { useAppTheme } from '../theme/AppTheme';
@@ -36,12 +39,61 @@ const ELEMENT_LIGHT_COLORS: Record<string, string> = {
   水: '#d9e9f5',
 };
 
+const ELEMENT_DARK_COLORS: Record<string, string> = {
+  木: '#1a3528',
+  火: '#3a1f1b',
+  土: '#3a2f1b',
+  金: '#2b2b2b',
+  水: '#15293f',
+};
+
+const ELEMENT_ORDER = ['木', '火', '土', '金', '水'];
+
+const BRANCH_TO_ELEMENT: Record<string, string> = {
+  子: '水', 丑: '土', 寅: '木', 卯: '木', 辰: '土', 巳: '火',
+  午: '火', 未: '土', 申: '金', 酉: '金', 戌: '土', 亥: '水',
+};
+
+const STEM_TO_ELEMENT: Record<string, string> = {
+  甲: '木', 乙: '木', 丙: '火', 丁: '火', 戊: '土',
+  己: '土', 庚: '金', 辛: '金', 壬: '水', 癸: '水',
+};
+
+function inferElementFromText(text: string): string | undefined {
+  for (const ch of text) {
+    if (ELEMENT_LIGHT_COLORS[ch]) return ch;
+  }
+  for (const ch of text) {
+    if (BRANCH_TO_ELEMENT[ch]) return BRANCH_TO_ELEMENT[ch];
+  }
+  for (const ch of text) {
+    if (STEM_TO_ELEMENT[ch]) return STEM_TO_ELEMENT[ch];
+  }
+  return undefined;
+}
+
+const ELEMENT_PALE_COLORS: Record<string, string> = {
+  木: '#bfe3ca',
+  火: '#efc0b8',
+  土: '#e4c98f',
+  金: '#d4d4d4',
+  水: '#b9d7ee',
+};
+
 const ELEMENT_DARK_CARD_COLORS: Record<string, string> = {
   木: '#11291d',
   火: '#321916',
   土: '#302512',
   金: '#29292d',
   水: '#102334',
+};
+
+const UNION_STATUS_COLORS: Record<UnionPattern['status'], string> = {
+  成势: '#1f7a3f',
+  待引: '#d08a18',
+  合住: '#1d5f9f',
+  冲破: '#c23a2b',
+  提示: '#6f7f8f',
 };
 
 const SPIRIT_ELEMENTS: Record<string, string> = {
@@ -62,10 +114,9 @@ const TEXT_SECTION_LABEL_KEYS: Record<HexagramTextSection, TranslationKey> = {
   judgment: 'analysis.judgment',
   tuan: 'analysis.tuan',
   image: 'analysis.image',
-  lines: 'analysis.lineText',
 };
 
-const TEXT_SECTIONS: HexagramTextSection[] = ['judgment', 'tuan', 'image', 'lines'];
+const TEXT_SECTIONS: HexagramTextSection[] = ['judgment', 'tuan', 'image'];
 
 function formatCompactChineseDateTime(value: string | Date) {
   const date = value instanceof Date ? value : new Date(value);
@@ -101,11 +152,48 @@ function formatStemBranchDateTimeLocalized(lunarInfo: Props['route']['params']['
   ].filter(Boolean).join(' · ');
 }
 
+function stripParentheticals(value: string): string {
+  return value
+    .replace(/[\(（][^\)）]*[\)）]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function stemBranchOfDate(value: string | Date): { month: string; day: string } | undefined {
+  try {
+    const date = value instanceof Date ? value : new Date(value);
+    if (isNaN(date.getTime())) return undefined;
+    const solar = Solar.fromYmdHms(
+      date.getFullYear(),
+      date.getMonth() + 1,
+      date.getDate(),
+      date.getHours(),
+      date.getMinutes(),
+      date.getSeconds()
+    );
+    const lunar = solar.getLunar();
+    return { month: lunar.getMonthInGanZhiExact(), day: lunar.getDayInGanZhiExact2() };
+  } catch {
+    return undefined;
+  }
+}
+
+function profileDisplayName(profile: Props['route']['params']['record']['profile'], fallback: string) {
+  const name = profile?.name?.trim();
+  return name && name !== '未填写' ? name : fallback;
+}
+
+function profileGenderLabel(profile: Props['route']['params']['record']['profile'], t: (key: TranslationKey) => string) {
+  if (profile?.gender === '男') return t('profileEdit.genderMale');
+  if (profile?.gender === '女') return t('profileEdit.genderFemale');
+  return t('profileEdit.genderUnset');
+}
+
 const SIX_KIN_EN: Record<string, string> = {
   兄弟: 'Sibling',
   子孙: 'Offspring',
   妻财: 'Wealth',
-  官鬼: 'Ghost',
+  官鬼: 'Officer',
   父母: 'Parent',
 };
 
@@ -126,22 +214,44 @@ const ELEMENT_EN: Record<string, string> = {
   水: 'Water',
 };
 
+const BRANCH_EN: Record<string, string> = {
+  子: 'Zi',
+  丑: 'Chou',
+  寅: 'Yin',
+  卯: 'Mao',
+  辰: 'Chen',
+  巳: 'Si',
+  午: 'Wu',
+  未: 'Wei',
+  申: 'Shen',
+  酉: 'You',
+  戌: 'Xu',
+  亥: 'Hai',
+};
+
 const STATUS_EN: Record<string, string> = {
   旺: 'Prosperous',
-  相: 'Ministerial',
+  相: 'Supported',
   休: 'Resting',
-  囚: 'Imprisoned',
-  死: 'Dead',
+  囚: 'Confined',
+  死: 'Weak',
   月破: 'Month Break',
   暗动: 'Hidden Motion',
   旬空: 'Void',
 };
 
 const SPIRIT_TITLE_EN: Record<string, string> = {
-  用神: 'Use God',
-  原神: 'Source God',
-  忌神: 'Adverse God',
-  仇神: 'Hostile God',
+  用神: 'Focus Spirit',
+  原神: 'Source Spirit',
+  忌神: 'Adverse Spirit',
+  仇神: 'Hostile Spirit',
+};
+
+const SPIRIT_TITLE_COMPACT_EN: Record<string, string> = {
+  用神: 'Focus',
+  原神: 'Source',
+  忌神: 'Adverse',
+  仇神: 'Hostile',
 };
 
 const LINE_POSITION_EN: Record<string, string> = {
@@ -153,6 +263,212 @@ const LINE_POSITION_EN: Record<string, string> = {
   上爻: 'Top line',
 };
 
+const UNION_KIND_EN: Record<UnionPattern['kind'], string> = {
+  三合: 'Three-Harmony',
+  半合: 'Half-Harmony',
+  六合: 'Six-Union',
+  六冲: 'Six-Clash',
+  卦象: 'Hexagram Pattern',
+};
+
+const UNION_STATUS_EN: Record<UnionPattern['status'], string> = {
+  成势: 'Formed',
+  待引: 'Awaiting Trigger',
+  合住: 'Binding',
+  冲破: 'Broken',
+  提示: 'Note',
+};
+
+function branchText(branch: string | undefined, language: 'zh' | 'en') {
+  if (!branch) return '';
+  return language === 'en' ? BRANCH_EN[branch] ?? branch : branch;
+}
+
+function elementText(element: string | undefined, language: 'zh' | 'en') {
+  if (!element) return '';
+  return language === 'en' ? ELEMENT_EN[element] ?? element : element;
+}
+
+function sixKinText(sixKin: string | undefined, language: 'zh' | 'en') {
+  if (!sixKin) return '';
+  return language === 'en' ? SIX_KIN_EN[sixKin] ?? sixKin : sixKin;
+}
+
+function linePositionText(positionName: string | undefined, language: 'zh' | 'en', compact = false) {
+  if (!positionName) return '';
+  if (language === 'zh') return positionName;
+  const index = ['初爻', '二爻', '三爻', '四爻', '五爻', '上爻'].indexOf(positionName);
+  if (index >= 0) return compact ? `L${index + 1}` : LINE_POSITION_EN[positionName] ?? `Line ${index + 1}`;
+  if (positionName === '日辰') return compact ? 'Day' : 'Day Branch';
+  if (positionName === '月建') return compact ? 'Month' : 'Month Branch';
+  return translateChineseTerms(positionName, language);
+}
+
+function spiritTitleText(title: SpiritAnalysis['title'], language: 'zh' | 'en', compact = false) {
+  if (language === 'zh') return title;
+  return compact ? SPIRIT_TITLE_COMPACT_EN[title] ?? title : SPIRIT_TITLE_EN[title] ?? title;
+}
+
+function spiritStrengthText(strength: string | undefined, language: 'zh' | 'en') {
+  if (!strength || language === 'zh') return strength ?? '';
+  const map: Record<string, string> = {
+    有力: 'Strong',
+    偏弱: 'Soft',
+    受制: 'Constrained',
+    空破: 'Void/Break',
+    受空: 'Void',
+    伏藏待引: 'Hidden',
+    暗中可用: 'Hidden Active',
+    未现: 'Not Visible',
+    待判断: 'Pending',
+  };
+  return map[strength] ?? translateChineseTerms(strength, language);
+}
+
+function spiritEvidenceText(tag: string, language: 'zh' | 'en') {
+  if (language === 'zh') return tag;
+  const map: Record<string, string> = {
+    动爻: 'Moving',
+    临世: 'World',
+    临应: 'Response',
+    伏神: 'Hidden',
+    旺: 'Prosperous',
+    相: 'Supported',
+    休: 'Resting',
+    囚: 'Confined',
+    死: 'Weak',
+    月破: 'Month Break',
+    暗动: 'Hidden Motion',
+    旬空: 'Void',
+  };
+  return map[tag] ?? translateChineseTerms(tag, language);
+}
+
+function spiritDisplayNameText(analysis: SpiritAnalysis, language: 'zh' | 'en') {
+  if (language === 'zh') return analysis.displayName;
+  if (analysis.lineIndex === undefined && analysis.strengthLabel === '未现') return 'Not visible';
+  const branch = analysis.displayName.match(/[子丑寅卯辰巳午未申酉戌亥]/)?.[0];
+  const element = analysis.displayName.match(/[木火土金水]/)?.[0] ?? analysis.color;
+  const hiddenPrefix = analysis.isHidden ? 'Hidden · ' : '';
+  const branchElement = branch ? ` · ${branchText(branch, language)} ${elementText(element, language)}` : '';
+  return `${hiddenPrefix}${sixKinText(analysis.sixKin, language)}${branchElement}`;
+}
+
+function spiritVerdictText(analysis: SpiritAnalysis, language: 'zh' | 'en') {
+  if (language === 'zh') return analysis.verdict;
+  const title = spiritTitleText(analysis.title, language, true);
+  const state = spiritStrengthText(analysis.strengthLabel, language);
+  if (analysis.strengthLabel === '未现') return `${title} is not visible; judge through World, Response, and moving lines.`;
+  if (analysis.title === '用神') return `The Focus shows the matter’s core condition. Current state: ${state}.`;
+  if (analysis.title === '原神') return `Source supports the Focus and shows available help. Current state: ${state}.`;
+  if (analysis.title === '忌神') return `Adverse restrains the Focus and marks the main pressure. Current state: ${state}.`;
+  return `Hostile feeds the Adverse line and may add indirect pressure. Current state: ${state}.`;
+}
+
+function spiritDetailText(analysis: SpiritAnalysis, language: 'zh' | 'en') {
+  if (language === 'zh') return analysis.detail;
+  if (analysis.strengthLabel === '未现') return 'No clear line is selected for this spirit, so its effect remains secondary.';
+  const position = linePositionText(analysis.positionName, language);
+  const tags = analysis.evidenceTags.slice(0, 4).map((tag) => spiritEvidenceText(tag, language)).join(', ');
+  const tagText = tags ? ` Key signals: ${tags}.` : '';
+  return `${spiritDisplayNameText(analysis, language)}${position ? ` at ${position}` : ''}. Read month/day strength, movement, World/Response position, void, and break together.${tagText}`;
+}
+
+function spiritReasonText(analysis: SpiritAnalysis | undefined, language: 'zh' | 'en') {
+  if (!analysis) return '';
+  if (language === 'zh') return analysis.reason;
+  if (analysis.title === '用神') return 'The Focus Spirit is selected from the question category and the line most directly representing the matter.';
+  if (analysis.title === '原神') return 'The Source Spirit is the line that generates and supports the Focus Spirit.';
+  if (analysis.title === '忌神') return 'The Adverse Spirit is the line that restrains the Focus Spirit.';
+  return 'The Hostile Spirit supports the Adverse Spirit and can pressure the Focus indirectly.';
+}
+
+function unionKindText(kind: UnionPattern['kind'], language: 'zh' | 'en') {
+  return language === 'en' ? UNION_KIND_EN[kind] ?? kind : kind;
+}
+
+function unionStatusText(status: UnionPattern['status'], language: 'zh' | 'en') {
+  return language === 'en' ? UNION_STATUS_EN[status] ?? status : status;
+}
+
+function unionPatternNameText(pattern: UnionPattern, language: 'zh' | 'en', compact = false) {
+  if (language === 'zh') return pattern.name;
+  const branches = pattern.participants
+    .filter((participant) => participant.branch)
+    .map((participant) => branchText(participant.branch, language))
+    .filter((item, index, array) => array.indexOf(item) === index);
+  const element = elementText(pattern.element, language);
+  if (pattern.kind === '三合') return `${branches.join('-')} ${element} Pattern`;
+  if (pattern.kind === '半合') return compact ? `${branches.join('-')} Half` : `${branches.join('-')} Half-Harmony ${element}`;
+  if (pattern.kind === '六合') return compact ? `${branches.join('-')} Union` : `${branches.join('-')} Six-Union`;
+  if (pattern.kind === '六冲') return compact ? `${branches.join('-')} Clash` : `${branches.join('-')} Six-Clash`;
+  return UNION_KIND_EN[pattern.kind] ?? pattern.name;
+}
+
+function unionRelationText(relationToUseGod: string, language: 'zh' | 'en') {
+  if (language === 'zh') return relationToUseGod;
+  if (relationToUseGod.includes('同气')) return 'Same element as the Focus; it reinforces the same field.';
+  if (relationToUseGod.includes('生扶')) return 'Generates the Focus; supportive for the matter.';
+  if (relationToUseGod.includes('克制')) return 'Restrains the Focus; this is a pressure signal.';
+  if (relationToUseGod.includes('泄')) return 'Drains the Focus; the matter may be consumed or delayed.';
+  if (relationToUseGod.includes('受用神所制')) return 'Controlled by the Focus; obstacles may be contained.';
+  if (relationToUseGod.includes('涉及用神')) return 'Directly touches the Focus and needs close attention.';
+  if (relationToUseGod.includes('未直接涉及用神')) return 'Does not directly touch the Focus.';
+  if (relationToUseGod.includes('卦体背景')) return 'A background hexagram tendency; judge it with Focus strength.';
+  return 'Relationship to the Focus is unclear.';
+}
+
+function unionImpactTextForDisplay(pattern: UnionPattern, language: 'zh' | 'en') {
+  if (language === 'zh') return pattern.impact;
+  const relation = unionRelationText(pattern.relationToUseGod, language);
+  if (pattern.kind === '六冲') return `${relation} Clash indicates movement, separation, interruption, or repetition.`;
+  if (pattern.kind === '六合') return `${relation} Six-Union suggests binding, attachment, negotiation, or delay.`;
+  if (pattern.status === '成势') return `${relation} The ${elementText(pattern.element, language)} pattern is formed and amplifies that element.`;
+  if (pattern.status === '待引') return `${relation} A partial structure is present, but it still awaits activation or a missing branch.`;
+  if (pattern.status === '冲破') return `${relation} The union intent is weakened by clash, void, or month break.`;
+  return relation;
+}
+
+function unionEvidenceTextForDisplay(item: string, pattern: UnionPattern, language: 'zh' | 'en') {
+  if (language === 'zh') return item;
+  if (item === pattern.relationToUseGod) return unionRelationText(item, language);
+  if (item.includes('三支')) {
+    const branchList = pattern.participants.map((participant) => branchText(participant.branch, language)).filter(Boolean).join(', ');
+    return `Required branches are present: ${branchList}.`;
+  }
+  if (item.includes('本卦已见')) return 'The hexagram contains a partial harmony structure.';
+  if (item.includes('参与动爻、世应或用神')) return 'One or more branches touch movement, World/Response, or the Focus.';
+  if (item.includes('未直接临动爻')) return 'The structure is present but relatively still.';
+  if (item.includes('月破')) return 'Month Break weakens this branch and destabilizes the pattern.';
+  if (item.includes('旬空')) return 'Void makes the union intent temporarily insubstantial.';
+  if (item.includes('相冲')) return 'An internal clash creates a structural fault.';
+  if (item.includes('六合不实')) return 'The Six-Union is present, but not solid.';
+  if (item.includes('冲主动')) return 'Clash brings movement, dispersal, and repetition, reducing stability.';
+  if (item.includes('六冲背景')) return 'The Six-Clash background weakens union stability.';
+  return translateChineseTerms(item, language);
+}
+
+function unionHeroTitleText(pattern: UnionPattern | undefined, analysis: UnionAnalysis, language: 'zh' | 'en') {
+  if (language === 'zh') return pattern?.verdict ?? analysis.verdict;
+  if (!pattern) return 'No clear union pattern';
+  return `${unionPatternNameText(pattern, language)} · ${unionStatusText(pattern.status, language)}`;
+}
+
+function unionHeroSummaryText(pattern: UnionPattern | undefined, analysis: UnionAnalysis, language: 'zh' | 'en') {
+  if (language === 'zh') return pattern?.impact ?? analysis.summary;
+  if (!pattern) return 'No structured union signal is strong enough to anchor the reading.';
+  return unionImpactTextForDisplay(pattern, language);
+}
+
+function unionResultCircleText(pattern: UnionPattern | undefined, hasFormedSanHe: boolean, language: 'zh' | 'en') {
+  if (language === 'zh') {
+    if (!pattern?.element) return hasFormedSanHe ? '成局' : '未成局';
+    return hasFormedSanHe ? `成${pattern.element}局` : `未成${pattern.element}局`;
+  }
+  if (!pattern?.element) return hasFormedSanHe ? 'Formed' : 'Pending';
+  return hasFormedSanHe ? `${elementText(pattern.element, language)}\nFormed` : `${elementText(pattern.element, language)}\nPending`;
+}
+
 function translateChineseTerms(text: string | undefined, language: 'zh' | 'en') {
   if (!text || language === 'zh') return text ?? '';
   let result = text;
@@ -163,6 +479,7 @@ function translateChineseTerms(text: string | undefined, language: 'zh' | 'en') 
     ...LINE_POSITION_EN,
     世爻: 'World line',
     应爻: 'Response line',
+    伏神: 'Hidden Spirit',
     世: 'World',
     应: 'Response',
     伏: 'hidden',
@@ -170,10 +487,40 @@ function translateChineseTerms(text: string | undefined, language: 'zh' | 'en') 
     暗动: 'Hidden Motion',
     旬空: 'Void',
     三合: 'Three-Harmony',
+    半合: 'Half-Combination',
     六合: 'Six-Combination',
     六冲: 'Six-Clash',
+    合局: 'Combination',
+    合意: 'Combination intent',
+    合冲并见: 'Combination and clash both present',
+    合局成势: 'Combination pattern formed',
+    六合牵连: 'Six-Combination binding',
+    未见明显合局: 'No clear combination pattern',
+    成势: 'Formed',
+    待引: 'Awaiting trigger',
+    合住: 'Bound',
+    冲破: 'Broken by clash',
+    提示: 'Note',
+    证据: 'evidence',
+    条: '',
+    日辰: 'Day officer',
+    月建: 'Month officer',
+    动: 'Moving',
+    半: 'Half',
     归魂: 'Returning Soul',
     游魂: 'Wandering Soul',
+    有力: 'Strong',
+    偏弱: 'Slightly weak',
+    受制: 'Constrained',
+    空破: 'Broken/Void',
+    受空: 'Void-affected',
+    伏藏待引: 'Hidden, awaiting trigger',
+    暗中可用: 'Usable in hidden motion',
+    未现: 'Not visible',
+    待判断: 'Pending',
+    动爻: 'Moving',
+    临世: 'On World',
+    临应: 'On Response',
     变: 'changes to',
     爻: 'line',
   }).forEach(([source, target]) => {
@@ -302,45 +649,11 @@ type FullTextBlock = {
   translation?: string;
 };
 
-function plainMeaning(original: string, section: HexagramTextSection, t: (key: TranslationKey) => string, language: 'zh' | 'en') {
-  if (!original) return t('analysis.noContentBody');
-  const prefix = t(TEXT_SECTION_LABEL_KEYS[section]);
-  if (language === 'en') {
-    return `${prefix}: this passage gives the core meaning of the hexagram in this section. Read it together with the question, World/Response, Use God, moving lines, and the strength granted or denied by the month and day officers. Favorable signs show usable openings; unfavorable signs show what must be guarded against.`;
-  }
-  return `${prefix}提示：这段文字说明本卦在当前部分的核心含义。宜结合所问之事、世应、用神、动爻以及日月旺衰综合判断；吉处看其可用之机，凶处看其所警之失。`;
-}
-
-function splitImageLines(text: ReturnType<typeof hexagramTextFor>) {
-  return text?.image.split('\n').filter(Boolean) ?? [];
-}
-
-function splitYaoLines(text: ReturnType<typeof hexagramTextFor>) {
-  return text?.lines.split('\n').filter(Boolean) ?? [];
-}
-
 function fullTextBlocks(text: ReturnType<typeof hexagramTextFor>, section: HexagramTextSection, t: (key: TranslationKey) => string, language: 'zh' | 'en'): FullTextBlock[] {
   if (!text) return [{ title: t('analysis.noContent'), original: t('analysis.noContentBody') }];
-  if (section === 'judgment' || section === 'tuan') {
-    const original = text[section] || t('analysis.noContentBody');
-    return [
-      { title: t('analysis.original'), original },
-      { title: t('analysis.plainMeaning'), original: plainMeaning(original, section, t, language) },
-    ];
-  }
-  if (section === 'image') {
-    const yaoTitles = splitYaoLines(text).map((line) => line.split('：')[0]).filter(Boolean);
-    return splitImageLines(text).map((original, index) => ({
-      title: index === 0 ? (language === 'en' ? 'Great Image' : '大象') : yaoTitles[index - 1] ?? (language === 'en' ? `Line ${index}` : `第 ${index} 爻`),
-      original,
-      translation: plainMeaning(original, section, t, language),
-    }));
-  }
-  return splitYaoLines(text).map((original, index) => ({
-    title: original.split('：')[0] || (language === 'en' ? `Line ${index + 1}` : `第 ${index + 1} 爻`),
-    original,
-    translation: plainMeaning(original, section, t, language),
-  }));
+  const original = text[section] || t('analysis.noContentBody');
+  const labelKey = TEXT_SECTION_LABEL_KEYS[section];
+  return [{ title: t(labelKey), original }];
 }
 
 function hiddenSpiritMetaForMode(line: HexagramLine, mode: MetaMode, language: 'zh' | 'en') {
@@ -437,41 +750,15 @@ function HexagramMarkTags({ marks }: { marks?: string[] }) {
   );
 }
 
+const ANALYSIS_TAB_KEYS: TranslationKey[] = ['analysis.tabReading', 'analysis.tabSpirits', 'analysis.tabUnions', 'analysis.tabVerify'];
+
 function AnalysisPageTabs({ scrollX, pageWidth, onSelect }: { scrollX: Animated.Value; pageWidth: number; onSelect: (index: number) => void }) {
   const { t } = useAppLanguage();
+  const slotWidth = 56;
+  const pagePositions = ANALYSIS_TAB_KEYS.map((_, index) => pageWidth * index);
   const pillTranslateX = scrollX.interpolate({
-    inputRange: [0, pageWidth * 0.5, pageWidth, pageWidth * 1.5, pageWidth * 2],
-    outputRange: [0, 28, 56, 84, 112],
-    extrapolate: 'clamp',
-  });
-  const firstTitleOpacity = scrollX.interpolate({
-    inputRange: [0, pageWidth * 0.45, pageWidth],
-    outputRange: [1, 0, 0],
-    extrapolate: 'clamp',
-  });
-  const firstDotOpacity = scrollX.interpolate({
-    inputRange: [0, pageWidth * 0.45, pageWidth],
-    outputRange: [0, 1, 1],
-    extrapolate: 'clamp',
-  });
-  const secondDotOpacity = scrollX.interpolate({
-    inputRange: [0, pageWidth * 0.55, pageWidth, pageWidth * 1.45, pageWidth * 2],
-    outputRange: [1, 1, 0, 1, 1],
-    extrapolate: 'clamp',
-  });
-  const secondTitleOpacity = scrollX.interpolate({
-    inputRange: [0, pageWidth * 0.55, pageWidth, pageWidth * 1.45, pageWidth * 2],
-    outputRange: [0, 0, 1, 0, 0],
-    extrapolate: 'clamp',
-  });
-  const thirdDotOpacity = scrollX.interpolate({
-    inputRange: [0, pageWidth, pageWidth * 1.55, pageWidth * 2],
-    outputRange: [1, 1, 1, 0],
-    extrapolate: 'clamp',
-  });
-  const thirdTitleOpacity = scrollX.interpolate({
-    inputRange: [0, pageWidth, pageWidth * 1.55, pageWidth * 2],
-    outputRange: [0, 0, 0, 1],
+    inputRange: pagePositions,
+    outputRange: ANALYSIS_TAB_KEYS.map((_, index) => slotWidth * index),
     extrapolate: 'clamp',
   });
 
@@ -481,30 +768,29 @@ function AnalysisPageTabs({ scrollX, pageWidth, onSelect }: { scrollX: Animated.
         <Animated.View style={[styles.analysisTabPillShadow, { transform: [{ translateX: pillTranslateX }] }]}>
           <View style={styles.analysisTabPill} />
         </Animated.View>
-        <Pressable style={styles.analysisTabSlot} onPress={() => onSelect(0)}>
-          <Animated.View pointerEvents="none" style={[styles.analysisTabLayer, { opacity: firstTitleOpacity }]}>
-            <Text style={styles.analysisTabText}>{t('analysis.tabSpirits')}</Text>
-          </Animated.View>
-          <Animated.View pointerEvents="none" style={[styles.analysisTabLayer, { opacity: firstDotOpacity }]}>
-            <View style={styles.analysisTabDot} />
-          </Animated.View>
-        </Pressable>
-        <Pressable style={styles.analysisTabSlot} onPress={() => onSelect(1)}>
-          <Animated.View pointerEvents="none" style={[styles.analysisTabLayer, { opacity: secondDotOpacity }]}>
-            <View style={styles.analysisTabDot} />
-          </Animated.View>
-          <Animated.View pointerEvents="none" style={[styles.analysisTabLayer, { opacity: secondTitleOpacity }]}>
-            <Text style={styles.analysisTabText}>{t('analysis.tabUnions')}</Text>
-          </Animated.View>
-        </Pressable>
-        <Pressable style={styles.analysisTabSlot} onPress={() => onSelect(2)}>
-          <Animated.View pointerEvents="none" style={[styles.analysisTabLayer, { opacity: thirdDotOpacity }]}>
-            <View style={styles.analysisTabDot} />
-          </Animated.View>
-          <Animated.View pointerEvents="none" style={[styles.analysisTabLayer, { opacity: thirdTitleOpacity }]}>
-            <Text style={styles.analysisTabText}>{t('analysis.tabVerify')}</Text>
-          </Animated.View>
-        </Pressable>
+        {ANALYSIS_TAB_KEYS.map((key, index) => {
+          const distance = Animated.divide(Animated.subtract(scrollX, pageWidth * index), pageWidth);
+          const titleOpacity = distance.interpolate({
+            inputRange: [-0.55, 0, 0.55],
+            outputRange: [0, 1, 0],
+            extrapolate: 'clamp',
+          });
+          const dotOpacity = titleOpacity.interpolate({
+            inputRange: [0, 1],
+            outputRange: [1, 0],
+            extrapolate: 'clamp',
+          });
+          return (
+            <Pressable key={key} style={styles.analysisTabSlot} onPress={() => onSelect(index)}>
+              <Animated.View pointerEvents="none" style={[styles.analysisTabLayer, { opacity: titleOpacity }]}>
+                <Text style={styles.analysisTabText}>{t(key)}</Text>
+              </Animated.View>
+              <Animated.View pointerEvents="none" style={[styles.analysisTabLayer, { opacity: dotOpacity }]}>
+                <View style={styles.analysisTabDot} />
+              </Animated.View>
+            </Pressable>
+          );
+        })}
       </View>
     </View>
   );
@@ -592,14 +878,332 @@ function SpiritAnalysisBlock({
           }}
           hitSlop={6}
         >
-            <Text style={[styles.summaryTitle, { color: colors.text }]}>{translateChineseTerms(analysis.title, language)}</Text>
-            <Text style={[styles.useGodValue, { color }]}>{translateChineseTerms(analysis.displayName, language)}</Text>
+            <Text style={[styles.summaryTitle, language === 'en' ? styles.summaryTitleEn : null, { color: colors.text }]}>{spiritTitleText(analysis.title, language, language === 'en')}</Text>
+            <Text style={[styles.useGodValue, language === 'en' ? styles.useGodValueEn : null, { color }]}>{spiritDisplayNameText(analysis, language)}</Text>
         </Pressable>
-        {analysis.positionName ? <Text style={[styles.spiritPositionText, { color: colors.text }]}>{translateChineseTerms(analysis.positionName, language)}</Text> : null}
+        <View style={styles.spiritMetaRight}>
+          <Text
+            numberOfLines={1}
+            adjustsFontSizeToFit
+            minimumFontScale={0.78}
+            style={[styles.spiritStrengthPill, language === 'en' ? styles.spiritStrengthPillEn : null, { color, borderColor: color }]}
+          >
+            {spiritStrengthText(analysis.strengthLabel, language)}
+          </Text>
+          {analysis.positionName ? <Text style={[styles.spiritPositionText, { color: colors.text }]}>{linePositionText(analysis.positionName, language, language === 'en')}</Text> : null}
+        </View>
       </View>
-      <Text style={[styles.summaryText, { color: colors.mutedText }]}>{translateChineseTerms(analysis.detail, language)}</Text>
+      <Text style={[styles.spiritVerdictText, { color: colors.text }]}>{spiritVerdictText(analysis, language)}</Text>
+      <View style={styles.spiritEvidenceRow}>
+        {analysis.evidenceTags.slice(0, 4).map((tag) => (
+          <Text
+            key={tag}
+            numberOfLines={1}
+            adjustsFontSizeToFit
+            minimumFontScale={0.78}
+            style={[styles.spiritEvidenceTag, language === 'en' ? styles.spiritEvidenceTagEn : null, { color, backgroundColor: darkMode ? 'rgba(255,255,255,0.08)' : 'rgba(255,255,255,0.56)' }]}
+          >
+            {spiritEvidenceText(tag, language)}
+          </Text>
+        ))}
+      </View>
+      <Text style={[styles.summaryText, { color: colors.mutedText }]}>{spiritDetailText(analysis, language)}</Text>
     </Pressable>
   );
+}
+
+function unionParticipantLabel(participant: UnionLineRef, language: 'zh' | 'en') {
+  const branch = branchText(participant.branch, language);
+  const element = elementText(participant.element, language);
+  if (participant.source !== 'line') return language === 'en' ? `${linePositionText(participant.positionName, language, true)} · ${branch} ${element}` : `${participant.positionName} ${branch}${element}`;
+  const badges = [
+    participant.role === 'world' ? (language === 'en' ? 'W' : '世') : '',
+    participant.role === 'response' ? (language === 'en' ? 'R' : '应') : '',
+    participant.moving ? (language === 'en' ? 'M' : '动') : '',
+  ].filter(Boolean);
+  if (language === 'en') return `${linePositionText(participant.positionName, language, true)} · ${sixKinText(participant.sixKin, language)} · ${branch} ${element}${badges.length ? ` · ${badges.join('/')}` : ''}`;
+  return `${participant.positionName} ${participant.sixKin}${branch}${element}${badges.length ? ` · ${badges.join('/')}` : ''}`;
+}
+
+function unionParticipantColor(participant: UnionLineRef, fallback: string) {
+  return ELEMENT_COLORS[participant.element] ?? fallback;
+}
+
+function UnionPatternCard({ pattern }: { pattern: UnionPattern }) {
+  const { darkMode, colors } = useAppTheme();
+  const { language } = useAppLanguage();
+  const statusColor = UNION_STATUS_COLORS[pattern.status] ?? colors.text;
+  const elementColor = pattern.element ? ELEMENT_COLORS[pattern.element] ?? statusColor : statusColor;
+  const patternBackground = pattern.element ? ELEMENT_LIGHT_COLORS[pattern.element] ?? '#fff' : '#fff';
+  return (
+    <View style={[styles.unionPatternCard, { backgroundColor: darkMode ? '#202024' : patternBackground }]}>
+      <View style={styles.unionPatternHeader}>
+        <View style={styles.unionPatternTitleWrap}>
+          <Text style={[styles.unionPatternKind, { color: statusColor }]}>{unionKindText(pattern.kind, language)}</Text>
+          <Text style={[styles.unionPatternName, language === 'en' ? styles.unionPatternNameEn : null, { color: colors.text }]}>{unionPatternNameText(pattern, language)}</Text>
+        </View>
+        <View style={[styles.unionStatusPill, { borderColor: statusColor, backgroundColor: darkMode ? '#202024' : patternBackground }]}>
+          <Text
+            numberOfLines={1}
+            adjustsFontSizeToFit
+            minimumFontScale={0.74}
+            style={[styles.unionStatusText, language === 'en' ? styles.unionStatusTextEn : null, { color: statusColor }]}
+          >
+            {unionStatusText(pattern.status, language)}
+          </Text>
+        </View>
+      </View>
+      <View style={styles.unionParticipantsRow}>
+        {pattern.participants.length ? pattern.participants.map((participant) => (
+          <View key={`${pattern.id}-${participant.source}-${participant.index}-${participant.branch}`} style={[styles.unionParticipantPill, { backgroundColor: unionParticipantColor(participant, elementColor) }]}>
+            <Text style={[styles.unionParticipantText, language === 'en' ? styles.unionParticipantTextEn : null]}>{unionParticipantLabel(participant, language)}</Text>
+          </View>
+        )) : (
+          <Text style={[styles.unionText, { color: colors.mutedText }]}>{unionEvidenceTextForDisplay(pattern.evidence[0], pattern, language)}</Text>
+        )}
+      </View>
+      <Text style={[styles.unionImpactText, { color: colors.text }]}>{unionImpactTextForDisplay(pattern, language)}</Text>
+      <View style={styles.unionEvidenceList}>
+        {pattern.evidence.map((item) => (
+          <View key={item} style={styles.unionEvidenceRow}>
+            <View style={[styles.unionEvidenceDot, { backgroundColor: statusColor }]} />
+            <Text style={[styles.unionEvidenceText, { color: colors.mutedText }]}>{unionEvidenceTextForDisplay(item, pattern, language)}</Text>
+          </View>
+        ))}
+        {pattern.weakPoints.map((item) => (
+          <View key={item} style={styles.unionEvidenceRow}>
+            <View style={[styles.unionEvidenceDot, { backgroundColor: '#c23a2b' }]} />
+            <Text style={[styles.unionEvidenceText, { color: colors.mutedText }]}>{unionEvidenceTextForDisplay(item, pattern, language)}</Text>
+          </View>
+        ))}
+      </View>
+    </View>
+  );
+}
+
+function unionTriangleLineStyle(from: { x: number; y: number }, to: { x: number; y: number }, color: string) {
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  const rawLength = Math.sqrt(dx * dx + dy * dy);
+  const nodeRadius = 19;
+  const lineThickness = 2;
+  const unitX = rawLength ? dx / rawLength : 0;
+  const unitY = rawLength ? dy / rawLength : 0;
+  const start = { x: from.x + unitX * nodeRadius, y: from.y + unitY * nodeRadius };
+  const end = { x: to.x - unitX * nodeRadius, y: to.y - unitY * nodeRadius };
+  const length = Math.max(0, rawLength - nodeRadius * 2);
+  const mid = { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 };
+  const angle = `${Math.atan2(dy, dx)}rad`;
+  return {
+    left: mid.x - length / 2,
+    top: mid.y - lineThickness / 2,
+    width: length,
+    backgroundColor: color,
+    transform: [{ rotate: angle }],
+  };
+}
+
+function unionTriangleX(index: number, participantOrder: number) {
+  const base = [72, 174, 252][participantOrder] ?? 174;
+  return base + (index % 2 === 0 ? -10 : 10);
+}
+
+function selectedUnionPattern(analysis: UnionAnalysis) {
+  const formed = analysis.patterns.find((pattern) => pattern.kind === '三合' && pattern.status === '成势' && pattern.participants.filter((item) => item.source === 'line').length === 3);
+  if (formed) return formed;
+  return analysis.patterns.find((pattern) => pattern.kind === '半合' && pattern.participants.filter((item) => item.source === 'line').length >= 2)
+    ?? analysis.patterns.find((pattern) => pattern.kind === '三合' || pattern.kind === '半合');
+}
+
+function visibleUnionPatterns(analysis: UnionAnalysis) {
+  const formedPatterns = analysis.patterns.filter((pattern) => pattern.kind === '三合' && pattern.status === '成势' && pattern.participants.filter((item) => item.source === 'line').length === 3);
+  if (formedPatterns.length) return formedPatterns;
+  const halfPatterns = analysis.patterns.filter((pattern) => pattern.kind === '半合' && pattern.participants.filter((item) => item.source === 'line').length >= 2);
+  if (halfPatterns.length) return halfPatterns.slice(0, 2);
+  const fallback = selectedUnionPattern(analysis);
+  return fallback ? [fallback] : [];
+}
+
+function unionLineSideLabels(line: HexagramLine, spiritAnalyses: SpiritAnalysis[], language: 'zh' | 'en') {
+  return [
+    roleText(line, language),
+    ...spiritAnalyses
+      .filter((analysis) => analysis.lineIndex === line.index && !analysis.isHidden)
+      .map((analysis) => spiritShortLabel(analysis.title, language)),
+  ].filter(Boolean);
+}
+
+function UnionHexagramDiagram({
+  analysis,
+  lines,
+  spiritAnalyses,
+  activeIndex,
+  onChangeIndex,
+  transitionProgress,
+}: {
+  analysis: UnionAnalysis;
+  lines: HexagramLine[];
+  spiritAnalyses: SpiritAnalysis[];
+  activeIndex: number;
+  onChangeIndex: (index: number) => void;
+  transitionProgress: Animated.Value;
+}) {
+  const { darkMode, colors } = useAppTheme();
+  const { language } = useAppLanguage();
+  const patterns = visibleUnionPatterns(analysis);
+  const pattern = patterns[Math.min(activeIndex, Math.max(0, patterns.length - 1))];
+  const lineParticipants = pattern?.participants.filter((item) => item.source === 'line').slice(0, 3) ?? [];
+  const nodePositions = lineParticipants.map((participant, order) => ({
+    participant,
+    x: unionTriangleX(participant.index, order),
+    y: (5 - participant.index) * 42 + 19,
+  }));
+  const unionLines = nodePositions.length === 2
+    ? [[nodePositions[0], nodePositions[1]] as const]
+    : nodePositions.length >= 3
+      ? nodePositions.map((position, index) => [position, nodePositions[(index + 1) % nodePositions.length]] as const)
+      : [];
+  const triangleColor = pattern?.element ? ELEMENT_COLORS[pattern.element] ?? '#555' : '#555';
+  const diagramBackground = darkMode ? '#1c1c20' : '#f1f1f1';
+  return (
+    <View style={[styles.unionDiagramCard, { backgroundColor: diagramBackground }]}>
+      <View style={styles.unionDiagramHeader}>
+        <Text style={[styles.unionDiagramTitle, { color: colors.text }]}>{language === 'en' ? 'Hexagram Union Map' : '六爻合局图'}</Text>
+        <View style={styles.unionDiagramHeaderRight}>
+          {patterns.length > 1 ? (
+            <View style={styles.unionDiagramSwitch}>
+              <Pressable style={styles.unionDiagramSwitchButton} onPress={() => onChangeIndex(Math.max(0, activeIndex - 1))} disabled={activeIndex <= 0}>
+                <Text style={[styles.unionDiagramSwitchText, { color: activeIndex <= 0 ? colors.faintText : colors.text }]}>‹</Text>
+              </Pressable>
+              <Text style={[styles.unionDiagramCountText, { color: colors.mutedText }]}>{Math.min(activeIndex + 1, patterns.length)}/{patterns.length}</Text>
+              <Pressable style={styles.unionDiagramSwitchButton} onPress={() => onChangeIndex(Math.min(patterns.length - 1, activeIndex + 1))} disabled={activeIndex >= patterns.length - 1}>
+                <Text style={[styles.unionDiagramSwitchText, { color: activeIndex >= patterns.length - 1 ? colors.faintText : colors.text }]}>›</Text>
+              </Pressable>
+            </View>
+          ) : null}
+          {pattern ? (
+            <Animated.Text
+              numberOfLines={1}
+              adjustsFontSizeToFit
+              minimumFontScale={0.72}
+              style={[styles.unionDiagramBadge, language === 'en' ? styles.unionDiagramBadgeEn : null, { color: triangleColor, borderColor: triangleColor, backgroundColor: diagramBackground, opacity: transitionProgress }]}
+            >
+              {pattern.name}
+            </Animated.Text>
+          ) : null}
+        </View>
+      </View>
+      <View style={styles.unionDiagramCanvas}>
+        {unionLines.length ? (
+          <Animated.View pointerEvents="none" style={[styles.unionMarkerLayer, { opacity: transitionProgress }]}>
+            {unionLines.map(([from, to]) => (
+              <View
+                key={`${from.participant.index}-${to.participant.index}`}
+                style={[styles.unionTriangleLine, unionTriangleLineStyle(from, to, triangleColor)]}
+              />
+            ))}
+          </Animated.View>
+        ) : null}
+        {[5, 4, 3, 2, 1, 0].map((index) => {
+          const line = lines.find((item) => item.index === index);
+          const position = nodePositions.find((item) => item.participant.index === index);
+          const lineElement = line?.branchElement ?? '';
+          const sideLabels = line ? unionLineSideLabels(line, spiritAnalyses, language) : [];
+          return (
+            <View key={index} style={[styles.unionDiagramLineRow, { top: (5 - index) * 42 }]}>
+              <Text style={[styles.unionDiagramLineLabel, language === 'en' ? styles.unionDiagramLineLabelEn : null, { color: colors.mutedText }]}>{linePositionText(['初爻', '二爻', '三爻', '四爻', '五爻', '上爻'][index], language, language === 'en')}</Text>
+              <View style={[styles.unionHexLine, { backgroundColor: ELEMENT_PALE_COLORS[lineElement] ?? colors.divider }]} />
+              {position ? (
+                <Animated.View style={[styles.unionBranchNode, { left: position.x - 19, backgroundColor: ELEMENT_COLORS[position.participant.element] ?? triangleColor, opacity: transitionProgress }]}>
+                  <Text
+                    numberOfLines={1}
+                    adjustsFontSizeToFit
+                    minimumFontScale={0.72}
+                    style={styles.unionBranchNodeText}
+                  >
+                    {position.participant.branch}
+                  </Text>
+                </Animated.View>
+              ) : null}
+              <View style={styles.unionDiagramSideLabels}>
+                {sideLabels.map((label) => (
+                  <Text key={label} style={[styles.unionDiagramSideLabel, { color: colors.text }]}>{label}</Text>
+                ))}
+              </View>
+            </View>
+          );
+        })}
+      </View>
+    </View>
+  );
+}
+
+function UnionAnalysisBlock({
+  analysis,
+  lines,
+  spiritAnalyses,
+  activePatternIndex,
+  transitionProgress,
+  onRequestPatternIndex,
+}: {
+  analysis?: UnionAnalysis;
+  lines: HexagramLine[];
+  spiritAnalyses: SpiritAnalysis[];
+  activePatternIndex: number;
+  transitionProgress: Animated.Value;
+  onRequestPatternIndex: (index: number) => void;
+}) {
+  const { darkMode, colors } = useAppTheme();
+  const { language } = useAppLanguage();
+  if (!analysis) {
+    return (
+      <View style={[styles.unionCard, { backgroundColor: colors.cardMuted }]}>
+        <Text style={[styles.unionTitle, { color: colors.text }]}>{language === 'en' ? 'Combination Analysis' : '合局分析'}</Text>
+        <Text style={[styles.unionText, { color: colors.mutedText }]}>{tOrFallback(language, '当前未见结构化合局数据。', 'No structured union analysis is available.')}</Text>
+      </View>
+    );
+  }
+  const hasFormedSanHe = analysis.patterns.some((pattern) => pattern.kind === '三合' && pattern.status === '成势');
+  const displayPatterns = visibleUnionPatterns(analysis);
+  const activePattern = displayPatterns[Math.min(activePatternIndex, Math.max(0, displayPatterns.length - 1))];
+  const activeColor = activePattern?.element ? ELEMENT_COLORS[activePattern.element] ?? '#1f7a3f' : (hasFormedSanHe ? '#1f7a3f' : '#6f7f8f');
+  const activeLightColor = activePattern?.element ? ELEMENT_LIGHT_COLORS[activePattern.element] ?? colors.cardMuted : colors.cardMuted;
+  const heroTitle = unionHeroTitleText(activePattern, analysis, language);
+  const heroSummary = unionHeroSummaryText(activePattern, analysis, language);
+  const resultCircleText = unionResultCircleText(activePattern, hasFormedSanHe, language);
+  return (
+    <View style={styles.unionAnalysisWrap}>
+      <View style={[styles.unionHeroCard, { backgroundColor: darkMode ? '#202024' : activeLightColor }]}>
+        <Animated.View style={[styles.unionHeroHeader, { opacity: transitionProgress }]}>
+          <View style={styles.unionHeroTitleWrap}>
+            <Text style={[styles.unionTitle, language === 'en' ? styles.unionTitleEn : null, { color: colors.text }]}>{heroTitle}</Text>
+            <Text style={[styles.unionText, { color: colors.mutedText }]}>{heroSummary}</Text>
+          </View>
+          <View style={[styles.unionResultCircle, { backgroundColor: activeColor }]}>
+            <Text
+              numberOfLines={2}
+              adjustsFontSizeToFit
+              minimumFontScale={0.68}
+              style={[styles.unionResultCircleText, language === 'en' ? styles.unionResultCircleTextEn : null]}
+            >
+              {resultCircleText}
+            </Text>
+          </View>
+        </Animated.View>
+      </View>
+      <UnionHexagramDiagram analysis={analysis} lines={lines} spiritAnalyses={spiritAnalyses} activeIndex={activePatternIndex} onChangeIndex={onRequestPatternIndex} transitionProgress={transitionProgress} />
+      {displayPatterns.length ? displayPatterns.map((pattern) => <UnionPatternCard key={pattern.id} pattern={pattern} />) : (
+        <View style={[styles.unionPatternCard, { backgroundColor: darkMode ? '#202024' : '#fff' }]}>
+          <Text style={[styles.unionPatternName, { color: colors.text }]}>{language === 'en' ? 'No clear union pattern' : '未见明显合局'}</Text>
+          <Text style={[styles.unionText, { color: colors.mutedText }]}>{language === 'en' ? 'No structured union signal is strong enough to anchor the reading.' : analysis.summary}</Text>
+        </View>
+      )}
+    </View>
+  );
+}
+
+function tOrFallback(language: 'zh' | 'en', zh: string, en: string) {
+  return language === 'en' ? en : zh;
 }
 
 function ResultInfoRow({ label, value }: { label: string; value: string }) {
@@ -620,6 +1224,344 @@ function ResultInfoRow({ label, value }: { label: string; value: string }) {
   );
 }
 
+function ReadingTimeline({
+  reading,
+  recordCreatedAt,
+  notes,
+  monthStemBranch,
+  dayStemBranch,
+}: {
+  reading: AIReading;
+  recordCreatedAt: string;
+  notes: VerificationNote[];
+  monthStemBranch: string;
+  dayStemBranch: string;
+}) {
+  const { colors, darkMode } = useAppTheme();
+  const { language, t } = useAppLanguage();
+  const timeline = reading.timeline?.length
+    ? reading.timeline
+    : [{ type: 'cast', label: t('analysis.timelineCast'), time_text: recordCreatedAt, detail: undefined }];
+  const baseItems = timeline.filter((item) => item.type !== 'note');
+  const noteItems = notes.map((note) => {
+    const sb = stemBranchOfDate(note.createdAt);
+    return {
+      type: 'note' as const,
+      label: note.fulfilled ? t('analysis.fulfilled') : t('analysis.unfulfilled'),
+      time_text: note.createdAt,
+      fulfilled: note.fulfilled,
+      stemBranch: sb,
+    };
+  });
+  const items = [...baseItems, ...noteItems];
+  const dotColorFor = (item: { type: string; fulfilled?: boolean }) => {
+    if (item.type === 'expected') return '#d08a18';
+    if (item.type === 'note') {
+      if (item.fulfilled) return darkMode ? '#7fc6a6' : '#3f8a63';
+      return darkMode ? '#a8a8a8' : '#888';
+    }
+    return darkMode ? '#5fb1ff' : '#2563c8';
+  };
+  const formatStemBranchMonthDay = (month: string, day: string) => {
+    if (language === 'zh') return `${month}月 ${day}日`;
+    return `${month} · ${day}`;
+  };
+  const [timelineWidth, setTimelineWidth] = useState(0);
+  const minNodeWidth = 72;
+  const nodeWidth = timelineWidth > 0 && items.length > 0
+    ? Math.max(minNodeWidth, Math.floor(timelineWidth / items.length))
+    : minNodeWidth;
+  return (
+    <View
+      style={[styles.aiTimelineCard, { backgroundColor: darkMode ? '#172333' : '#e6f0f8' }]}
+      onLayout={(event) => {
+        const inner = event.nativeEvent.layout.width - 28;
+        if (inner > 0 && Math.abs(inner - timelineWidth) > 0.5) setTimelineWidth(inner);
+      }}
+    >
+      <Text style={[styles.aiSectionTitle, { color: colors.text }]}>{t('analysis.timelineTitle')}</Text>
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        scrollEnabled={items.length * minNodeWidth > timelineWidth}
+        contentContainerStyle={styles.aiTimelineList}
+      >
+        {items.map((item, index) => {
+          const isLast = index === items.length - 1;
+          let label: string;
+          let timeText: string;
+          if (item.type === 'cast') {
+            label = t('analysis.timelineCast');
+            timeText = formatStemBranchMonthDay(monthStemBranch, dayStemBranch);
+          } else if (item.type === 'note') {
+            label = (item as typeof noteItems[number]).label;
+            const sb = (item as typeof noteItems[number]).stemBranch;
+            timeText = sb
+              ? formatStemBranchMonthDay(sb.month, sb.day)
+              : formatCompactDateTime(item.time_text, language) || item.time_text;
+          } else if (item.type === 'expected') {
+            label = t('analysis.timelineExpected');
+            timeText = stripParentheticals(item.time_text);
+          } else {
+            label = (item as { label: string }).label;
+            timeText = item.time_text;
+          }
+          return (
+            <View key={`${item.type}-${index}-${item.time_text}`} style={[styles.aiTimelineNode, { width: nodeWidth }]}>
+              <View style={styles.aiTimelineNodeHead}>
+                <View style={[styles.aiTimelineDot, { backgroundColor: dotColorFor(item) }]} />
+                {!isLast ? <View style={[styles.aiTimelineLine, { backgroundColor: darkMode ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.12)' }]} /> : null}
+              </View>
+              <Text style={[styles.aiTimelineLabel, { color: colors.text }]} numberOfLines={language === 'en' ? 2 : 1}>{label}</Text>
+              <Text style={[styles.aiTimelineTime, { color: colors.mutedText }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>{timeText}</Text>
+            </View>
+          );
+        })}
+      </ScrollView>
+    </View>
+  );
+}
+
+function AIReadingLoader() {
+  const { colors, darkMode } = useAppTheme();
+  const { t } = useAppLanguage();
+  const pulse = useRef(new Animated.Value(0)).current;
+  const orbit = useRef(new Animated.Value(0)).current;
+  const phase = useRef(new Animated.Value(0)).current;
+  const [phaseIndex, setPhaseIndex] = useState(0);
+  const phaseKeys: TranslationKey[] = [
+    'analysis.aiPhase1',
+    'analysis.aiPhase2',
+    'analysis.aiPhase3',
+    'analysis.aiPhase4',
+  ];
+  useEffect(() => {
+    const pulseLoop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulse, { toValue: 1, duration: 1100, easing: Easing.inOut(Easing.quad), useNativeDriver: true }),
+        Animated.timing(pulse, { toValue: 0, duration: 1100, easing: Easing.inOut(Easing.quad), useNativeDriver: true }),
+      ])
+    );
+    const orbitLoop = Animated.loop(
+      Animated.timing(orbit, { toValue: 1, duration: 2400, easing: Easing.linear, useNativeDriver: true })
+    );
+    pulseLoop.start();
+    orbitLoop.start();
+    return () => { pulseLoop.stop(); orbitLoop.stop(); };
+  }, [pulse, orbit]);
+  useEffect(() => {
+    const id = setInterval(() => {
+      setPhaseIndex((prev) => (prev + 1) % phaseKeys.length);
+      Animated.sequence([
+        Animated.timing(phase, { toValue: 1, duration: 220, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
+        Animated.timing(phase, { toValue: 0, duration: 220, easing: Easing.in(Easing.cubic), useNativeDriver: true }),
+      ]).start();
+    }, 1800);
+    return () => clearInterval(id);
+  }, [phase, phaseKeys.length]);
+  const ringScale = pulse.interpolate({ inputRange: [0, 1], outputRange: [1, 1.35] });
+  const ringOpacity = pulse.interpolate({ inputRange: [0, 1], outputRange: [0.55, 0] });
+  const innerScale = pulse.interpolate({ inputRange: [0, 1], outputRange: [0.92, 1.06] });
+  const orbitRotate = orbit.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] });
+  const phaseOpacity = phase.interpolate({ inputRange: [0, 0.5, 1], outputRange: [1, 0.2, 1] });
+  const phaseTranslateY = phase.interpolate({ inputRange: [0, 1], outputRange: [0, -4] });
+  const accentA = darkMode ? '#7aa6ff' : '#3a6dd1';
+  const accentB = darkMode ? '#c98aff' : '#8a4dd1';
+  const accentC = darkMode ? '#5fd2c2' : '#1f9c89';
+  return (
+    <View style={styles.aiLoaderShadow}>
+      <View style={[styles.aiLoaderCard, { backgroundColor: darkMode ? '#16223a' : '#eef2fb' }]}>
+        <LinearGradient
+          colors={darkMode ? ['rgba(122,166,255,0.18)', 'rgba(201,138,255,0.10)', 'rgba(95,210,194,0.18)'] : ['rgba(58,109,209,0.14)', 'rgba(138,77,209,0.10)', 'rgba(31,156,137,0.14)']}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={StyleSheet.absoluteFill}
+        />
+        <View style={styles.aiLoaderOrb}>
+          <Animated.View style={[styles.aiLoaderRing, { borderColor: accentA, transform: [{ scale: ringScale }], opacity: ringOpacity }]} />
+          <Animated.View style={[styles.aiLoaderRing, styles.aiLoaderRingDelay, { borderColor: accentB, transform: [{ scale: ringScale }], opacity: ringOpacity }]} />
+          <Animated.View style={[styles.aiLoaderOrbit, { transform: [{ rotate: orbitRotate }] }]}>
+            <View style={[styles.aiLoaderSpark, { backgroundColor: accentA, top: 0, left: '50%', marginLeft: -3 }]} />
+            <View style={[styles.aiLoaderSpark, { backgroundColor: accentB, bottom: 0, left: '50%', marginLeft: -3 }]} />
+            <View style={[styles.aiLoaderSpark, { backgroundColor: accentC, left: 0, top: '50%', marginTop: -3 }]} />
+            <View style={[styles.aiLoaderSpark, { backgroundColor: accentA, right: 0, top: '50%', marginTop: -3 }]} />
+          </Animated.View>
+          <Animated.View style={[styles.aiLoaderCore, { transform: [{ scale: innerScale }] }]}>
+            <LinearGradient
+              colors={[accentA, accentB]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={styles.aiLoaderCoreFill}
+            />
+          </Animated.View>
+        </View>
+        <Text style={[styles.aiLoaderTitle, { color: colors.text }]}>{t('analysis.aiGenerating')}</Text>
+        <Animated.Text
+          style={[
+            styles.aiLoaderPhase,
+            { color: colors.mutedText, opacity: phaseOpacity, transform: [{ translateY: phaseTranslateY }] },
+          ]}
+          numberOfLines={3}
+        >
+          {t(phaseKeys[phaseIndex])}
+        </Animated.Text>
+      </View>
+    </View>
+  );
+}
+
+function AIRevealView({ index, children }: { index: number; children: React.ReactNode }) {
+  const progress = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    Animated.timing(progress, {
+      toValue: 1,
+      duration: 720,
+      delay: 120 + index * 220,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    }).start();
+  }, [progress, index]);
+  return (
+    <Animated.View style={{ opacity: progress }}>
+      {children}
+    </Animated.View>
+  );
+}
+
+function AIReadingBlock({
+  reading,
+  saved,
+  loading,
+  error,
+  recordCreatedAt,
+  notes,
+  onGenerate,
+  monthStemBranch,
+  dayStemBranch,
+  guestMode,
+}: {
+  reading?: AIReading;
+  saved: boolean;
+  loading: boolean;
+  error?: string;
+  recordCreatedAt: string;
+  notes: VerificationNote[];
+  onGenerate: () => void;
+  monthStemBranch: string;
+  dayStemBranch: string;
+  guestMode?: boolean;
+}) {
+  const { colors, darkMode } = useAppTheme();
+  const { language, t } = useAppLanguage();
+  if (guestMode) {
+    return (
+      <View style={[styles.aiReadingWrap, styles.aiReadingWrapFill]}>
+        <View style={styles.aiEmptyShadow}>
+          <View style={[styles.aiEmptyCardFill, { backgroundColor: darkMode ? '#172333' : '#e6f0f8' }]}>
+            <Text style={[styles.aiEmptyTitle, { color: colors.text }]}>{t('analysis.guestUnavailableTitle')}</Text>
+            <Text style={[styles.aiEmptyBody, { color: colors.mutedText }]}>{t('analysis.guestUnavailableBody')}</Text>
+          </View>
+        </View>
+      </View>
+    );
+  }
+  if (loading && !reading) {
+    return (
+      <View style={[styles.aiReadingWrap, styles.aiReadingWrapFill]}>
+        <AIReadingLoader />
+        {error ? <Text style={styles.aiErrorText}>{error}</Text> : null}
+      </View>
+    );
+  }
+  if (!reading) {
+    return (
+      <View style={styles.aiReadingWrap}>
+        <View style={[styles.aiEmptyCard, { backgroundColor: darkMode ? '#172333' : '#e6f0f8' }]}>
+          <Text style={[styles.aiEmptyTitle, { color: colors.text }]}>{t('analysis.aiEmptyTitle')}</Text>
+          <Text style={[styles.aiEmptyBody, { color: colors.mutedText }]}>
+            {saved ? t('analysis.aiEmptyBody') : t('analysis.aiUnsavedBody')}
+          </Text>
+          {error ? <Text style={styles.aiErrorText}>{error}</Text> : null}
+          <Pressable
+            disabled={!saved || loading}
+            style={[styles.aiGenerateButton, { backgroundColor: saved && !loading ? colors.inverse : colors.divider }]}
+            onPress={onGenerate}
+          >
+            <Text style={[styles.aiGenerateButtonText, { color: saved && !loading ? colors.inverseText : colors.faintText }]}>
+              {loading ? t('analysis.aiGenerating') : t('analysis.aiGenerate')}
+            </Text>
+          </Pressable>
+        </View>
+      </View>
+    );
+  }
+  return (
+    <View style={styles.aiReadingWrap}>
+      <AIRevealView index={0}>
+        <View style={styles.aiVerdictShadow}>
+          <View style={[styles.aiVerdictCard, { backgroundColor: darkMode ? '#11291d' : '#dceee1' }]}>
+            <LinearGradient
+              colors={darkMode ? ['rgba(95,210,194,0.18)', 'rgba(122,166,255,0.10)'] : ['rgba(31,156,137,0.16)', 'rgba(58,109,209,0.08)']}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={StyleSheet.absoluteFill}
+            />
+            <View style={styles.aiVerdictHeader}>
+              <Text style={[styles.aiVerdictLabel, { color: colors.mutedText }]}>{t('analysis.aiVerdict')}</Text>
+            </View>
+            <Text
+              style={[styles.aiVerdictText, language === 'en' ? styles.aiVerdictTextEn : null, { color: colors.text }]}
+              adjustsFontSizeToFit={language === 'en'}
+              minimumFontScale={0.7}
+            >
+              {reading.verdict}
+            </Text>
+          </View>
+        </View>
+      </AIRevealView>
+      <AIRevealView index={1}>
+        <ReadingTimeline
+          reading={reading}
+          recordCreatedAt={recordCreatedAt}
+          notes={notes}
+          monthStemBranch={monthStemBranch}
+          dayStemBranch={dayStemBranch}
+        />
+      </AIRevealView>
+      <View style={styles.aiPointList}>
+        {reading.points.map((point, index) => {
+          const inferred = inferElementFromText(`${point.claim} ${point.evidence.join(' ')} ${point.explanation}`);
+          const element = inferred ?? ELEMENT_ORDER[index % ELEMENT_ORDER.length];
+          const cardBg = darkMode
+            ? ELEMENT_DARK_COLORS[element] ?? colors.cardMuted
+            : ELEMENT_LIGHT_COLORS[element] ?? colors.cardMuted;
+          const tagBg = darkMode ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.06)';
+          return (
+            <AIRevealView key={`${point.claim}-${index}`} index={2 + index}>
+              <View style={[styles.aiPointCard, { backgroundColor: cardBg }]}>
+                <Text style={[styles.aiPointTitle, { color: colors.text }]}>{point.claim}</Text>
+                <View style={styles.aiEvidenceRow}>
+                  {point.evidence.slice(0, 2).map((evidence) => (
+                    <Text
+                      key={evidence}
+                      numberOfLines={1}
+                      style={[styles.aiEvidenceTag, { color: colors.text, backgroundColor: tagBg }]}
+                    >
+                      {evidence}
+                    </Text>
+                  ))}
+                </View>
+                <Text style={[styles.aiPointExplanation, { color: colors.mutedText }]}>{point.explanation}</Text>
+              </View>
+            </AIRevealView>
+          );
+        })}
+      </View>
+      {error ? <Text style={styles.aiErrorText}>{error}</Text> : null}
+    </View>
+  );
+}
+
 function VerificationNoteCard({
   note,
   deleteArmed,
@@ -627,9 +1569,11 @@ function VerificationNoteCard({
   onUpdate,
   onDelete,
   onFocus,
-  keyboardLift,
   language,
   onMeasured,
+  onLayoutY,
+  keyboardLift,
+  keyboardVisible,
 }: {
   note: VerificationNote;
   deleteArmed: boolean;
@@ -637,8 +1581,10 @@ function VerificationNoteCard({
   onUpdate: (id: number, patch: Partial<VerificationNote>) => void;
   onDelete: (id: number) => void;
   onFocus: () => void;
-  keyboardLift: Animated.Value;
   onMeasured?: (height: number) => void;
+  onLayoutY?: (y: number, height: number) => void;
+  keyboardLift?: Animated.AnimatedInterpolation<number> | Animated.Value;
+  keyboardVisible?: boolean;
   language: 'zh' | 'en';
 }) {
   const { darkMode, colors } = useAppTheme();
@@ -647,6 +1593,7 @@ function VerificationNoteCard({
   const switchProgress = useRef(new Animated.Value(note.fulfilled ? 1 : 0)).current;
   const deleteProgress = useRef(new Animated.Value(deleteArmed ? 1 : 0)).current;
   const [switchWidth, setSwitchWidth] = useState(0);
+  const [isFocused, setIsFocused] = useState(false);
   const indicatorWidth = Math.max(0, (switchWidth - 6) / 2);
   const indicatorTranslateX = switchProgress.interpolate({
     inputRange: [0, 1],
@@ -705,8 +1652,12 @@ function VerificationNoteCard({
 
   return (
     <Animated.View
-      onLayout={(event) => onMeasured?.(event.nativeEvent.layout.height)}
-      style={[styles.resultNoteCard, { opacity, transform: [{ translateY: keyboardLift }] }]}
+      onLayout={(event) => {
+        const { y, height } = event.nativeEvent.layout;
+        onMeasured?.(height);
+        onLayoutY?.(y, height);
+      }}
+      style={[styles.resultNoteCard, { opacity, transform: keyboardLift ? [{ translateY: keyboardLift }] : undefined }]}
     >
       <Animated.View
         pointerEvents="none"
@@ -780,13 +1731,20 @@ function VerificationNoteCard({
         <TextInput
           value={note.note}
           onChangeText={(text) => onUpdate(note.id, { note: text })}
-          onFocus={onFocus}
+          onFocus={() => { setIsFocused(true); onFocus(); }}
+          onBlur={() => setIsFocused(false)}
           placeholder={t('analysis.notePlaceholder')}
           placeholderTextColor={colors.faintText}
           multiline
           textAlignVertical="top"
           style={[styles.resultNoteInput, { backgroundColor: darkMode ? 'rgba(255,255,255,0.08)' : 'rgba(255,255,255,0.78)', color: colors.text }]}
         />
+        {keyboardVisible && !isFocused ? (
+          <Pressable
+            style={StyleSheet.absoluteFill}
+            onPress={() => Keyboard.dismiss()}
+          />
+        ) : null}
       </Pressable>
     </Animated.View>
   );
@@ -895,8 +1853,6 @@ function ElementalStatusBadge({ status, specialStatus }: { status?: string; spec
   if (specialStatus === '月破') {
     return (
       <View style={[styles.statusBadge, styles.monthBreakBadge]}>
-        <View style={styles.monthBreakMoon} />
-        <View style={styles.monthBreakMoonCut} />
         <Text style={styles.monthBreakText}>破</Text>
       </View>
     );
@@ -905,7 +1861,6 @@ function ElementalStatusBadge({ status, specialStatus }: { status?: string; spec
   if (specialStatus === '暗动') {
     return (
       <View style={[styles.statusBadge, styles.hiddenMoveBadge]}>
-        <View style={styles.hiddenMoveSun} />
         <Text style={styles.hiddenMoveText}>暗</Text>
       </View>
     );
@@ -1180,7 +2135,7 @@ export function AnalysisScreen({ navigation, route }: Props) {
   const { language, t } = useAppLanguage();
   const { record } = route.params;
   const fromHistory = route.params.fromHistory === true;
-  const { width: windowWidth } = useWindowDimensions();
+  const { width: windowWidth, height: windowHeight } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const [metaMode, setMetaMode] = useState<MetaMode>('sixKin');
   const [showStatus, setShowStatus] = useState(false);
@@ -1194,9 +2149,15 @@ export function AnalysisScreen({ navigation, route }: Props) {
   const [selectedSpiritAnalysis, setSelectedSpiritAnalysis] = useState<SpiritAnalysis | undefined>();
   const [spiritReasonAnchor, setSpiritReasonAnchor] = useState({ x: 20, y: 120 });
   const [spiritRipples, setSpiritRipples] = useState<SpiritRippleItem[]>([]);
+  const [activeUnionPatternIndex, setActiveUnionPatternIndex] = useState(0);
   const [selectedTextSection, setSelectedTextSection] = useState<HexagramTextSection>('judgment');
+  const keyboardBottomPad = useRef(new Animated.Value(0)).current;
+  const [keyboardVisible, setKeyboardVisible] = useState(false);
   const [verificationNotes, setVerificationNotes] = useState<VerificationNote[]>(record.verificationNotes ?? []);
   const verificationNotesRef = useRef<VerificationNote[]>(record.verificationNotes ?? []);
+  const [aiReading, setAiReading] = useState<AIReading | undefined>(record.analysis.aiReadingStructured);
+  const [aiReadingLoading, setAiReadingLoading] = useState(false);
+  const [aiReadingError, setAiReadingError] = useState<string | undefined>();
   const [pendingVerificationNote, setPendingVerificationNote] = useState<VerificationNote | undefined>();
   const [armedDeleteNoteId, setArmedDeleteNoteId] = useState<number | undefined>();
   const [moreMenuVisible, setMoreMenuVisible] = useState(false);
@@ -1208,6 +2169,11 @@ export function AnalysisScreen({ navigation, route }: Props) {
   const saveToastProgress = useRef(new Animated.Value(0)).current;
   const [unsavedPromptVisible, setUnsavedPromptVisible] = useState(false);
   const [finalYinGap, setFinalYinGap] = useState(INTRO_YIN_GAP);
+  const [guestMode, setGuestMode] = useState(false);
+  useEffect(() => { isGuestMode().then(setGuestMode); }, []);
+  const unionTransitionProgress = useRef(new Animated.Value(1)).current;
+  const unionTransitioningRef = useRef(false);
+  const unionTransitionTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const statusVisualProgress = useRef(new Animated.Value(0)).current;
   const statusColumnWidth = useRef(new Animated.Value(0)).current;
   const unchangedChangedLinesProgress = useRef(new Animated.Value(1)).current;
@@ -1241,11 +2207,17 @@ export function AnalysisScreen({ navigation, route }: Props) {
   const introChangedHexTranslateY = useRef(new Animated.Value(0)).current;
   const introOverlayOpacity = useRef(new Animated.Value(1)).current;
   const mainOpacity = useRef(new Animated.Value(0)).current;
-  const noteKeyboardLift = useRef(new Animated.Value(0)).current;
   const noteInsertSpacerHeight = useRef(new Animated.Value(0)).current;
+  const noteKeyboardLift = useRef(new Animated.Value(0)).current;
   const moreMenuProgress = useRef(new Animated.Value(0)).current;
   const moreBackdropProgress = useRef(new Animated.Value(0)).current;
   const measuredNoteCardHeight = useRef(ESTIMATED_RESULT_NOTE_CARD_HEIGHT);
+  const noteScrollRef = useRef<ScrollView | null>(null);
+  const noteScrollHeightRef = useRef(0);
+  const noteCardYRef = useRef<Record<number, number>>({});
+  const noteCardHeightRef = useRef<Record<number, number>>({});
+  const keyboardHeightRef = useRef(0);
+  const focusedNoteIdRef = useRef<number | undefined>(undefined);
   const addingNoteRef = useRef(false);
   const introBaseHexRef = useRef<View | null>(null);
   const introChangedHexRef = useRef<View | null>(null);
@@ -1298,11 +2270,13 @@ export function AnalysisScreen({ navigation, route }: Props) {
   };
 
   async function saveRecordWithNotes(notes: VerificationNote[]) {
-    await saveRecord({
+    const saved = await saveRecord({
       ...record,
+      analysis: { ...record.analysis, aiReadingStructured: aiReading },
       favorite,
       verificationNotes: notes,
     });
+    if (saved.analysis.aiReadingStructured) setAiReading(saved.analysis.aiReadingStructured);
     markRecordSaved();
   }
 
@@ -1310,17 +2284,57 @@ export function AnalysisScreen({ navigation, route }: Props) {
     UIManager.setLayoutAnimationEnabledExperimental?.(true);
   }, []);
 
+  useEffect(() => () => {
+    if (unionTransitionTimerRef.current) {
+      clearTimeout(unionTransitionTimerRef.current);
+    }
+  }, []);
+
   useEffect(() => {
+    const scrollFocusedIntoView = (keyboardHeight: number) => {
+      const noteId = focusedNoteIdRef.current;
+      if (noteId === undefined) return;
+      const cardY = noteCardYRef.current[noteId];
+      const cardH = noteCardHeightRef.current[noteId] ?? measuredNoteCardHeight.current;
+      if (cardY === undefined) return;
+      const scrollHeight = noteScrollHeightRef.current || (windowHeight - insets.top);
+      const visibleHeight = scrollHeight - keyboardHeight;
+      const margin = 24;
+      const targetY = Math.max(0, cardY + cardH + margin - visibleHeight);
+      noteScrollRef.current?.scrollTo({ y: targetY, animated: true });
+    };
     const showSubscription = Keyboard.addListener('keyboardWillShow', (event) => {
-      const lift = -Math.min(Math.max(0, event.endCoordinates.height - insets.bottom) * 0.35, windowWidth * 0.35);
+      keyboardHeightRef.current = event.endCoordinates.height;
+      setKeyboardVisible(true);
+      Animated.timing(keyboardBottomPad, {
+        toValue: event.endCoordinates.height,
+        duration: event.duration || 260,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: false,
+      }).start();
+      const lift = -Math.min(Math.max(0, event.endCoordinates.height - insets.bottom) * 0.18, 80);
       Animated.timing(noteKeyboardLift, {
         toValue: lift,
         duration: event.duration || 260,
         easing: Easing.out(Easing.cubic),
         useNativeDriver: true,
       }).start();
+      scrollFocusedIntoView(event.endCoordinates.height);
+    });
+    const didShowSubscription = Keyboard.addListener('keyboardDidShow', (event) => {
+      keyboardHeightRef.current = event.endCoordinates.height;
+      keyboardBottomPad.setValue(event.endCoordinates.height);
+      scrollFocusedIntoView(event.endCoordinates.height);
     });
     const hideSubscription = Keyboard.addListener('keyboardWillHide', (event) => {
+      keyboardHeightRef.current = 0;
+      setKeyboardVisible(false);
+      Animated.timing(keyboardBottomPad, {
+        toValue: 0,
+        duration: event.duration || 240,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: false,
+      }).start();
       Animated.timing(noteKeyboardLift, {
         toValue: 0,
         duration: event.duration || 240,
@@ -1328,22 +2342,8 @@ export function AnalysisScreen({ navigation, route }: Props) {
         useNativeDriver: true,
       }).start();
     });
-    const didShowSubscription = Keyboard.addListener('keyboardDidShow', (event) => {
-      const lift = -Math.min(Math.max(0, event.endCoordinates.height - insets.bottom) * 0.35, windowWidth * 0.35);
-      Animated.timing(noteKeyboardLift, {
-        toValue: lift,
-        duration: 180,
-        easing: Easing.out(Easing.cubic),
-        useNativeDriver: true,
-      }).start();
-    });
     const didHideSubscription = Keyboard.addListener('keyboardDidHide', () => {
-      Animated.timing(noteKeyboardLift, {
-        toValue: 0,
-        duration: 180,
-        easing: Easing.out(Easing.cubic),
-        useNativeDriver: true,
-      }).start();
+      keyboardHeightRef.current = 0;
       saveRecordWithNotes(verificationNotesRef.current);
     });
     return () => {
@@ -1352,7 +2352,7 @@ export function AnalysisScreen({ navigation, route }: Props) {
       didShowSubscription.remove();
       didHideSubscription.remove();
     };
-  }, [insets.bottom, noteKeyboardLift, windowWidth]);
+  }, [insets.top, windowHeight]);
 
   const measureInWindow = useCallback((node: View | null) =>
     new Promise<LayoutRect | undefined>((resolve) => {
@@ -1455,6 +2455,36 @@ export function AnalysisScreen({ navigation, route }: Props) {
     analysisPagerRef.current?.scrollTo({ x: analysisPageWidth * index, animated: true });
   };
 
+  const requestUnionPatternIndex = (index: number) => {
+    if (index === activeUnionPatternIndex || unionTransitioningRef.current) return;
+    unionTransitioningRef.current = true;
+    if (unionTransitionTimerRef.current) {
+      clearTimeout(unionTransitionTimerRef.current);
+      unionTransitionTimerRef.current = undefined;
+    }
+    Animated.timing(unionTransitionProgress, {
+      toValue: 0,
+      duration: 130,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    }).start(() => {
+      unionTransitionProgress.stopAnimation();
+      unionTransitionProgress.setValue(0);
+      setActiveUnionPatternIndex(index);
+      unionTransitionTimerRef.current = setTimeout(() => {
+        Animated.timing(unionTransitionProgress, {
+          toValue: 1,
+          duration: 210,
+          easing: Easing.out(Easing.cubic),
+          useNativeDriver: true,
+        }).start(() => {
+          unionTransitioningRef.current = false;
+          unionTransitionTimerRef.current = undefined;
+        });
+      }, 32);
+    });
+  };
+
   const startSpiritRipple = (lineIndex: number, isHidden: boolean) => {
     const id = rippleIdRef.current + 1;
     rippleIdRef.current = id;
@@ -1555,9 +2585,24 @@ export function AnalysisScreen({ navigation, route }: Props) {
     });
   };
 
-  const focusVerificationInput = () => {
+  const focusVerificationInput = (noteId?: number) => {
     setArmedDeleteNoteId(undefined);
     animateDividerCollapse(1);
+    if (noteId !== undefined) {
+      focusedNoteIdRef.current = noteId;
+      const keyboardHeight = keyboardHeightRef.current;
+      if (keyboardHeight > 0) {
+        const cardY = noteCardYRef.current[noteId];
+        const cardH = noteCardHeightRef.current[noteId] ?? measuredNoteCardHeight.current;
+        if (cardY !== undefined) {
+          const scrollHeight = noteScrollHeightRef.current || (windowHeight - insets.top);
+          const visibleHeight = scrollHeight - keyboardHeight;
+          const margin = 24;
+          const targetY = Math.max(0, cardY + cardH + margin - visibleHeight);
+          noteScrollRef.current?.scrollTo({ y: targetY, animated: true });
+        }
+      }
+    }
   };
 
   const openMoreMenu = () => {
@@ -1613,6 +2658,7 @@ export function AnalysisScreen({ navigation, route }: Props) {
 
   const recordForSaving = () => ({
     ...record,
+    analysis: { ...record.analysis, aiReadingStructured: aiReading },
     favorite,
     verificationNotes,
   });
@@ -1651,7 +2697,8 @@ export function AnalysisScreen({ navigation, route }: Props) {
 
   const saveCurrentRecord = async () => {
     closeMoreMenu();
-    await saveRecord(recordForSaving());
+    const saved = await saveRecord(recordForSaving());
+    if (saved.analysis.aiReadingStructured) setAiReading(saved.analysis.aiReadingStructured);
     markRecordSaved();
     showSaveToast();
   };
@@ -1674,11 +2721,80 @@ export function AnalysisScreen({ navigation, route }: Props) {
     setFavorite(nextFavorite);
     await saveRecord({
       ...record,
+      analysis: { ...record.analysis, aiReadingStructured: aiReading },
       favorite: nextFavorite,
       verificationNotes,
     });
     markRecordSaved();
   };
+
+  const generateAIReading = async () => {
+    if (!savedRecordRef.current || aiReadingLoading) return;
+    setAiReadingLoading(true);
+    setAiReadingError(undefined);
+    try {
+      const reading = await generateRemoteAIReading(record.id, language);
+      setAiReading(reading);
+      await saveRecord({
+        ...record,
+        analysis: { ...record.analysis, aiReadingStructured: reading },
+        favorite,
+        verificationNotes: verificationNotesRef.current,
+      });
+      markRecordSaved();
+    } catch (error) {
+      setAiReadingError(error instanceof Error ? error.message : t('analysis.aiFailed'));
+    } finally {
+      setAiReadingLoading(false);
+    }
+  };
+
+  const autoReadingTriggeredRef = useRef(false);
+  const initialLanguageRef = useRef(language);
+  const readingLanguageMatches = (reading?: AIReading): boolean => {
+    if (!reading) return false;
+    if (!reading.lang) return true;
+    return reading.lang === language;
+  };
+  useEffect(() => {
+    if (autoReadingTriggeredRef.current) return;
+    if (guestMode) {
+      autoReadingTriggeredRef.current = true;
+      return;
+    }
+    if (aiReadingLoading) return;
+    if (aiReading && readingLanguageMatches(aiReading)) {
+      autoReadingTriggeredRef.current = true;
+      return;
+    }
+    if (fromHistory) {
+      autoReadingTriggeredRef.current = true;
+      return;
+    }
+    autoReadingTriggeredRef.current = true;
+    (async () => {
+      try {
+        if (!savedRecordRef.current) {
+          await saveRecordWithNotes(verificationNotesRef.current);
+        }
+      } catch {
+        autoReadingTriggeredRef.current = false;
+        return;
+      }
+      generateAIReading();
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [guestMode]);
+  useEffect(() => {
+    if (language === initialLanguageRef.current) return;
+    initialLanguageRef.current = language;
+    if (guestMode) return;
+    if (fromHistory) return;
+    if (aiReadingLoading) return;
+    if (aiReading && readingLanguageMatches(aiReading)) return;
+    generateAIReading();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [language]);
 
   const leaveWithoutSaving = () => {
     setUnsavedPromptVisible(false);
@@ -2435,6 +3551,7 @@ export function AnalysisScreen({ navigation, route }: Props) {
           decelerationRate="fast"
           snapToInterval={analysisPageWidth}
           style={[styles.analysisPager, { width: analysisPageWidth, backgroundColor: colors.background }]}
+          onScrollBeginDrag={() => Keyboard.dismiss()}
           onScroll={Animated.event(
             [{ nativeEvent: { contentOffset: { x: analysisPageScrollX } } }],
             { useNativeDriver: true }
@@ -2443,23 +3560,31 @@ export function AnalysisScreen({ navigation, route }: Props) {
         >
             <Animated.ScrollView
               style={[styles.analysisPage, { width: analysisPageWidth, backgroundColor: colors.background }]}
+              contentContainerStyle={[styles.analysisPageContent, styles.aiPageContent]}
+              showsVerticalScrollIndicator={false}
+              scrollEventThrottle={16}
+            >
+              <AIReadingBlock
+                reading={aiReading}
+                saved={savedRecord}
+                loading={aiReadingLoading}
+                error={aiReadingError}
+                recordCreatedAt={record.createdAt}
+                notes={verificationNotes}
+                onGenerate={generateAIReading}
+                monthStemBranch={record.lunarInfo.monthStemBranch}
+                dayStemBranch={record.lunarInfo.dayStemBranch}
+                guestMode={guestMode}
+              />
+            </Animated.ScrollView>
+            <Animated.ScrollView
+              style={[styles.analysisPage, { width: analysisPageWidth, backgroundColor: colors.background }]}
               contentContainerStyle={[styles.analysisPageContent, styles.spiritPageContent]}
               showsVerticalScrollIndicator={false}
               scrollEventThrottle={16}
             >
               <View style={styles.spiritCardList}>
-                {(spiritAnalyses.length
-                  ? spiritAnalyses
-                  : [
-                      {
-                        title: '用神' as const,
-                        sixKin: record.analysis.useGod,
-                        displayName: record.analysis.useGod,
-                        reason: record.analysis.useGodReason,
-                        detail: record.analysis.summary,
-                      },
-                    ]
-                ).map((analysis) => (
+                {spiritAnalyses.map((analysis) => (
                   <SpiritAnalysisBlock
                     key={analysis.title}
                     analysis={analysis}
@@ -2476,17 +3601,24 @@ export function AnalysisScreen({ navigation, route }: Props) {
               showsVerticalScrollIndicator={false}
               scrollEventThrottle={16}
             >
-              <View style={[styles.unionCard, { backgroundColor: colors.cardMuted }]}>
-                <Text style={[styles.unionTitle, { color: colors.text }]}>{t('analysis.unionTitle')}</Text>
-                <Text style={[styles.unionText, { color: colors.mutedText }]}>{record.analysis.sanHe ? translateChineseTerms(record.analysis.sanHe, language) : t('analysis.noUnion')}</Text>
-              </View>
+              <UnionAnalysisBlock
+                analysis={record.analysis.unionAnalysis}
+                lines={record.hexagram.lines}
+                spiritAnalyses={spiritAnalyses}
+                activePatternIndex={activeUnionPatternIndex}
+                transitionProgress={unionTransitionProgress}
+                onRequestPatternIndex={requestUnionPatternIndex}
+              />
             </Animated.ScrollView>
             <Animated.ScrollView
+              ref={noteScrollRef as never}
               style={[styles.analysisPage, { width: analysisPageWidth, backgroundColor: colors.background }]}
               contentContainerStyle={styles.analysisPageContent}
               showsVerticalScrollIndicator={false}
               scrollEventThrottle={16}
-              keyboardShouldPersistTaps="handled"
+              keyboardShouldPersistTaps="never"
+              keyboardDismissMode="interactive"
+              onLayout={(event) => { noteScrollHeightRef.current = event.nativeEvent.layout.height; }}
             >
               <Pressable
                 style={styles.resultDismissLayer}
@@ -2502,8 +3634,8 @@ export function AnalysisScreen({ navigation, route }: Props) {
                   label={t('analysis.stemBranchTime')}
                   value={language === 'en' ? translateChineseTerms(formatStemBranchDateTimeLocalized(record.lunarInfo, language), language) : formatStemBranchDateTimeLocalized(record.lunarInfo, language)}
                 />
-                <ResultInfoRow label={t('analysis.querent')} value={translateChineseTerms(t('analysis.unfilled'), language)} />
-                <ResultInfoRow label={t('analysis.gender')} value={translateChineseTerms(t('analysis.unfilled'), language)} />
+                <ResultInfoRow label={t('analysis.querent')} value={profileDisplayName(record.profile, t('analysis.unfilled'))} />
+                <ResultInfoRow label={t('analysis.gender')} value={profileGenderLabel(record.profile, t)} />
               </View>
               {verificationNotes.map((note) => (
                 <VerificationNoteCard
@@ -2513,13 +3645,18 @@ export function AnalysisScreen({ navigation, route }: Props) {
                   onArmDelete={setArmedDeleteNoteId}
                   onUpdate={updateVerificationNote}
                   onDelete={deleteVerificationNote}
-                  onFocus={focusVerificationInput}
+                  onFocus={() => focusVerificationInput(note.id)}
                   keyboardLift={noteKeyboardLift}
+                  keyboardVisible={keyboardVisible}
                   language={language}
                   onMeasured={(height) => {
                     if (height > 0 && !addingNoteRef.current) {
                       measuredNoteCardHeight.current = height;
                     }
+                  }}
+                  onLayoutY={(y, height) => {
+                    noteCardYRef.current[note.id] = y;
+                    noteCardHeightRef.current[note.id] = height;
                   }}
                 />
               ))}
@@ -2535,6 +3672,7 @@ export function AnalysisScreen({ navigation, route }: Props) {
                 <Text style={[styles.addResultText, { color: colors.inverseText }]}>{t('analysis.addNote')}</Text>
               </Pressable>
               </Pressable>
+              <Animated.View pointerEvents="none" style={{ height: keyboardBottomPad }} />
             </Animated.ScrollView>
         </Animated.ScrollView>
         <Animated.View style={[styles.analysisTabsOverlay, { opacity: mainOpacity }]}>
@@ -2647,9 +3785,11 @@ export function AnalysisScreen({ navigation, route }: Props) {
       <Modal transparent visible={Boolean(selectedSpiritAnalysis)} animationType="fade" onRequestClose={() => setSelectedSpiritAnalysis(undefined)}>
         <Pressable style={styles.textModalBackdrop} onPress={() => setSelectedSpiritAnalysis(undefined)}>
           <Pressable style={[styles.spiritReasonCard, { left: spiritReasonAnchor.x, top: spiritReasonAnchor.y, backgroundColor: colors.card, borderColor: colors.border }]} onPress={(event) => event.stopPropagation()}>
-            <Text style={[styles.spiritReasonTitle, { color: colors.text }]}>{translateChineseTerms(selectedSpiritAnalysis?.title, language)} {translateChineseTerms(selectedSpiritAnalysis?.displayName, language)}</Text>
+            <Text style={[styles.spiritReasonTitle, { color: colors.text }]}>
+              {selectedSpiritAnalysis ? `${spiritTitleText(selectedSpiritAnalysis.title, language, language === 'en')} ${spiritDisplayNameText(selectedSpiritAnalysis, language)}` : ''}
+            </Text>
             <View style={[styles.textModalDivider, { backgroundColor: colors.divider }]} />
-            <Text style={[styles.spiritReasonBody, { color: colors.mutedText }]}>{translateChineseTerms(selectedSpiritAnalysis?.reason, language)}</Text>
+            <Text style={[styles.spiritReasonBody, { color: colors.mutedText }]}>{spiritReasonText(selectedSpiritAnalysis, language)}</Text>
           </Pressable>
         </Pressable>
       </Modal>
@@ -2988,10 +4128,7 @@ const styles = StyleSheet.create({
   monthBreakText: { color: '#000', fontSize: 12, fontWeight: '900', lineHeight: 14, includeFontPadding: false, zIndex: 2 },
   hiddenMoveText: { color: '#000', fontSize: 12, fontWeight: '900', lineHeight: 14, includeFontPadding: false, zIndex: 2 },
   monthBreakBadge: { backgroundColor: '#c8322a' },
-  monthBreakMoon: { position: 'absolute', width: 16, height: 16, borderRadius: 8, backgroundColor: '#fff' },
-  monthBreakMoonCut: { position: 'absolute', left: -3, top: -2, width: 13, height: 16, borderRadius: 8, backgroundColor: '#c8322a' },
   hiddenMoveBadge: { backgroundColor: '#6f3cc3' },
-  hiddenMoveSun: { position: 'absolute', width: 16, height: 16, borderRadius: 8, backgroundColor: '#f5a623' },
   voidBadge: { backgroundColor: '#e8e8e8' },
   voidStatusText: { color: '#111', fontSize: 12, fontWeight: '900', lineHeight: 14, includeFontPadding: false },
   strokeFull: { height: 8, borderRadius: 2, backgroundColor: '#000' },
@@ -3060,7 +4197,7 @@ const styles = StyleSheet.create({
   analysisTabsOverlay: { position: 'absolute', top: 40, left: -20, right: -20, zIndex: 80, elevation: 80, alignItems: 'center' },
   analysisTabs: { alignItems: 'center', overflow: 'visible' },
   analysisTabsInner: {
-    width: 168,
+    width: 224,
     height: 34,
     flexDirection: 'row',
     alignItems: 'center',
@@ -3076,7 +4213,7 @@ const styles = StyleSheet.create({
     height: 26,
     borderRadius: 12,
     shadowColor: '#000',
-    shadowOpacity: 0.18,
+    shadowOpacity: 0.12,
     shadowRadius: 10,
     shadowOffset: { width: 0, height: 5 },
     elevation: 8,
@@ -3115,11 +4252,168 @@ const styles = StyleSheet.create({
   analysisPager: { flex: 1, marginHorizontal: -20, backgroundColor: '#f7f7f7' },
   analysisPage: { flex: 1, backgroundColor: '#f7f7f7' },
   analysisPageContent: { paddingHorizontal: 20, paddingTop: 72, paddingBottom: 12, gap: 10 },
+  aiPageContent: { flexGrow: 1 },
   resultDismissLayer: { gap: 15 },
-  spiritPageContent: { flexGrow: 1 },
-  spiritCardList: { flex: 1, gap: 10 },
-  spiritAnalysisCard: {
+  spiritPageContent: { paddingBottom: 24 },
+  spiritCardList: { gap: 10 },
+  aiReadingWrap: { gap: 10, paddingBottom: 18 },
+  aiReadingWrapFill: { flex: 1, paddingBottom: 12 },
+  aiEmptyShadow: {
     flex: 1,
+    borderRadius: 18,
+    backgroundColor: 'transparent',
+    shadowColor: '#000',
+    shadowOpacity: 0.18,
+    shadowRadius: 14,
+    shadowOffset: { width: 0, height: 7 },
+    elevation: 8,
+  },
+  aiEmptyCardFill: {
+    flex: 1,
+    borderRadius: 18,
+    paddingVertical: 28,
+    paddingHorizontal: 22,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 12,
+    overflow: 'hidden',
+  },
+  aiEmptyCard: {
+    minHeight: 230,
+    borderRadius: 18,
+    padding: 18,
+    gap: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOpacity: 0.13,
+    shadowRadius: 13,
+    shadowOffset: { width: 0, height: 7 },
+    elevation: 8,
+  },
+  aiEmptyTitle: { fontSize: 18, fontWeight: '900', lineHeight: 24, textAlign: 'center' },
+  aiEmptyBody: { fontSize: 13, fontWeight: '700', lineHeight: 20, textAlign: 'center' },
+  aiGenerateButton: { height: 44, minWidth: 156, borderRadius: 14, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 18, marginTop: 4 },
+  aiGenerateButtonText: { fontSize: 14, fontWeight: '900' },
+  aiErrorText: { color: '#c23a2b', fontSize: 12, fontWeight: '800', lineHeight: 18, textAlign: 'center' },
+  aiVerdictShadow: {
+    borderRadius: 18,
+    backgroundColor: 'transparent',
+    shadowColor: '#000',
+    shadowOpacity: 0.18,
+    shadowRadius: 14,
+    shadowOffset: { width: 0, height: 7 },
+    elevation: 8,
+  },
+  aiVerdictCard: {
+    borderRadius: 18,
+    padding: 16,
+    gap: 10,
+    overflow: 'hidden',
+  },
+  aiVerdictHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
+  aiVerdictLabel: { fontSize: 11, fontWeight: '900', lineHeight: 15 },
+  aiExpectedPill: { maxWidth: 156, borderRadius: 999, backgroundColor: '#d08a18', paddingHorizontal: 9, paddingVertical: 4 },
+  aiExpectedPillText: { color: '#fff', fontSize: 10, fontWeight: '900', lineHeight: 13 },
+  aiVerdictText: { fontSize: 22, fontWeight: '900', lineHeight: 30 },
+  aiVerdictTextEn: { fontSize: 19, lineHeight: 26 },
+  aiTimelineCard: {
+    borderRadius: 16,
+    padding: 14,
+    gap: 10,
+    shadowColor: '#000',
+    shadowOpacity: 0.12,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 7,
+  },
+  aiSectionTitle: { fontSize: 13, fontWeight: '900', lineHeight: 18 },
+  aiTimelineList: { flexDirection: 'row', alignItems: 'flex-start', gap: 0, marginTop: 6, paddingRight: 4 },
+  aiTimelineNode: { alignItems: 'center', gap: 4 },
+  aiTimelineNodeHead: { width: '100%', height: 10, alignItems: 'center', justifyContent: 'center' },
+  aiTimelineDot: { width: 10, height: 10, borderRadius: 5, zIndex: 1 },
+  aiTimelineLine: { position: 'absolute', left: '50%', right: '-50%', top: 4, height: 2 },
+  aiTimelineLabel: { fontSize: 12, fontWeight: '900', lineHeight: 17, textAlign: 'center' },
+  aiTimelineTime: { fontSize: 10, fontWeight: '800', lineHeight: 14, textAlign: 'center' },
+  aiLoaderShadow: {
+    flex: 1,
+    borderRadius: 18,
+    backgroundColor: 'transparent',
+    shadowColor: '#000',
+    shadowOpacity: 0.22,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 10,
+  },
+  aiLoaderCard: {
+    flex: 1,
+    borderRadius: 18,
+    paddingVertical: 28,
+    paddingHorizontal: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 12,
+    overflow: 'hidden',
+  },
+  aiLoaderOrb: {
+    width: 92,
+    height: 92,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  aiLoaderRing: {
+    position: 'absolute',
+    width: 92,
+    height: 92,
+    borderRadius: 46,
+    borderWidth: 2,
+  },
+  aiLoaderRingDelay: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+  },
+  aiLoaderOrbit: {
+    position: 'absolute',
+    width: 92,
+    height: 92,
+  },
+  aiLoaderSpark: {
+    position: 'absolute',
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    alignSelf: 'center',
+  },
+  aiLoaderCore: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    overflow: 'hidden',
+  },
+  aiLoaderCoreFill: {
+    flex: 1,
+  },
+  aiLoaderTitle: { fontSize: 14, fontWeight: '900', lineHeight: 19, textAlign: 'center' },
+  aiLoaderPhase: { fontSize: 12, fontWeight: '700', lineHeight: 17, textAlign: 'center', minHeight: 51, paddingHorizontal: 16 },
+  aiPointList: { gap: 10 },
+  aiPointCard: {
+    borderRadius: 15,
+    padding: 14,
+    gap: 8,
+    shadowColor: '#000',
+    shadowOpacity: 0.12,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 5 },
+    elevation: 6,
+  },
+  aiPointTitle: { fontSize: 14, fontWeight: '900', lineHeight: 19 },
+  aiEvidenceRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
+  aiEvidenceTag: { borderRadius: 999, paddingHorizontal: 8, paddingVertical: 3, fontSize: 10, fontWeight: '900', lineHeight: 13, overflow: 'hidden', maxWidth: '100%' },
+  aiPointExplanation: { fontSize: 12, fontWeight: '700', lineHeight: 19 },
+  aiRefreshButton: { height: 42, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
+  aiRefreshButtonText: { fontSize: 13, fontWeight: '900' },
+  spiritAnalysisCard: {
     borderRadius: 14,
     padding: 12,
     gap: 5,
@@ -3129,11 +4423,40 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 6 },
     elevation: 8,
   },
-  useGodRow: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', gap: 8 },
-  spiritTitleLeft: { flexDirection: 'row', alignItems: 'baseline', gap: 8, flexShrink: 1 },
+  useGodRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
+  spiritTitleLeft: { flexDirection: 'row', alignItems: 'baseline', gap: 8, flex: 1, minWidth: 0 },
+  spiritMetaRight: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 6, flexShrink: 0 },
+  spiritStrengthPill: {
+    minWidth: 42,
+    maxWidth: 84,
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: 999,
+    borderWidth: 1,
+    fontSize: 10,
+    fontWeight: '900',
+    lineHeight: 14,
+    textAlign: 'center',
+    overflow: 'hidden',
+  },
+  spiritStrengthPillEn: { minWidth: 48, maxWidth: 88, fontSize: 9 },
   summaryTitle: { color: '#000', fontSize: 13, fontWeight: '800' },
+  summaryTitleEn: { fontSize: 12, flexShrink: 0 },
   useGodValue: { fontSize: 13, fontWeight: '900', lineHeight: 24 },
-  spiritPositionText: { color: '#000', fontSize: 12, fontWeight: '800', lineHeight: 24 },
+  useGodValueEn: { flex: 1, minWidth: 0, fontSize: 12, lineHeight: 18, flexWrap: 'wrap' },
+  spiritPositionText: { color: '#000', fontSize: 11, fontWeight: '800', lineHeight: 14 },
+  spiritVerdictText: { color: '#111', fontSize: 13, fontWeight: '800', lineHeight: 19 },
+  spiritEvidenceRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 5 },
+  spiritEvidenceTag: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 999,
+    fontSize: 10,
+    fontWeight: '900',
+    lineHeight: 13,
+    overflow: 'hidden',
+  },
+  spiritEvidenceTagEn: { maxWidth: 110, fontSize: 9 },
   summaryText: { color: '#333', fontSize: 12, lineHeight: 18 },
   unionCard: {
     borderRadius: 14,
@@ -3146,6 +4469,116 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 6 },
     elevation: 8,
   },
+  unionAnalysisWrap: { gap: 10, paddingBottom: 12 },
+  unionHeroCard: {
+    borderRadius: 16,
+    padding: 14,
+    gap: 12,
+    shadowColor: '#000',
+    shadowOpacity: 0.14,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 7,
+  },
+  unionHeroHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
+  unionHeroTitleWrap: { flex: 1, gap: 6 },
+  unionTitleEn: { fontSize: 13, lineHeight: 18 },
+  unionResultCircle: {
+    width: 66,
+    height: 66,
+    borderRadius: 33,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+    shadowColor: '#000',
+    shadowOpacity: 0.18,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 5 },
+    elevation: 6,
+  },
+  unionResultCircleText: { color: '#fff', fontSize: 14, fontWeight: '900', lineHeight: 16, textAlign: 'center' },
+  unionResultCircleTextEn: { width: 56, fontSize: 12, lineHeight: 14 },
+  unionHeroTags: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
+  unionHeroTag: { borderWidth: 1, borderRadius: 999, paddingHorizontal: 8, paddingVertical: 3, fontSize: 11, fontWeight: '900', overflow: 'hidden' },
+  unionDiagramCard: {
+    borderRadius: 16,
+    padding: 14,
+    gap: 10,
+    shadowColor: '#000',
+    shadowOpacity: 0.1,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 5 },
+    elevation: 5,
+  },
+  unionDiagramHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
+  unionDiagramTitle: { fontSize: 13, fontWeight: '900', lineHeight: 18, flexShrink: 0 },
+  unionDiagramHeaderRight: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 8, flex: 1, minWidth: 0 },
+  unionDiagramSwitch: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  unionDiagramSwitchButton: { width: 22, height: 22, alignItems: 'center', justifyContent: 'center' },
+  unionDiagramSwitchText: { fontSize: 20, fontWeight: '900', lineHeight: 22 },
+  unionDiagramCountText: { minWidth: 24, fontSize: 10, fontWeight: '900', lineHeight: 13, textAlign: 'center' },
+  unionDiagramBadge: { borderWidth: 1, borderRadius: 999, paddingHorizontal: 8, paddingVertical: 3, fontSize: 10, fontWeight: '900', lineHeight: 13, overflow: 'hidden' },
+  unionDiagramBadgeEn: { maxWidth: 132, fontSize: 9 },
+  unionDiagramCanvas: { height: 252, position: 'relative', overflow: 'visible' },
+  unionMarkerLayer: { ...StyleSheet.absoluteFillObject, zIndex: 3 },
+  unionDiagramLineRow: { position: 'absolute', left: 0, right: 0, height: 38, flexDirection: 'row', alignItems: 'center' },
+  unionDiagramLineLabel: { width: 42, fontSize: 11, fontWeight: '800', lineHeight: 14 },
+  unionDiagramLineLabelEn: { width: 34, fontSize: 10 },
+  unionHexLine: { width: 236, height: 8, borderRadius: 3 },
+  unionTriangleLine: { position: 'absolute', height: 2, borderRadius: 999, transformOrigin: 'center', opacity: 0.5, zIndex: 3 },
+  unionBranchNode: {
+    position: 'absolute',
+    top: 0,
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: 'rgba(255,255,255,0.84)',
+    shadowColor: '#000',
+    shadowOpacity: 0.2,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 6,
+    zIndex: 5,
+  },
+  unionBranchNodeText: { color: '#fff', fontSize: 14, fontWeight: '900', lineHeight: 18 },
+  unionBranchNodeTextEn: { width: 34, fontSize: 11 },
+  unionDiagramSideLabels: { marginLeft: 10, minWidth: 48, flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
+  unionDiagramSideLabel: {
+    fontSize: 9,
+    fontWeight: '900',
+    lineHeight: 14,
+    textAlign: 'center',
+  },
+  unionPatternCard: {
+    borderRadius: 16,
+    padding: 13,
+    gap: 10,
+    shadowColor: '#000',
+    shadowOpacity: 0.18,
+    shadowRadius: 14,
+    shadowOffset: { width: 0, height: 7 },
+    elevation: 9,
+  },
+  unionPatternHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
+  unionPatternTitleWrap: { flex: 1, gap: 2 },
+  unionPatternKind: { fontSize: 10, fontWeight: '900', lineHeight: 13 },
+  unionPatternName: { fontSize: 13, fontWeight: '900', lineHeight: 18 },
+  unionPatternNameEn: { fontSize: 12, lineHeight: 17 },
+  unionStatusPill: { borderWidth: 1, borderRadius: 999, paddingHorizontal: 8, paddingVertical: 3, maxWidth: 118 },
+  unionStatusText: { fontSize: 10, fontWeight: '900', lineHeight: 13 },
+  unionStatusTextEn: { fontSize: 9 },
+  unionParticipantsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
+  unionParticipantPill: { borderRadius: 999, paddingHorizontal: 8, paddingVertical: 4, maxWidth: '100%' },
+  unionParticipantText: { color: '#fff', fontSize: 10, fontWeight: '900', lineHeight: 14 },
+  unionParticipantTextEn: { fontSize: 9, lineHeight: 13 },
+  unionImpactText: { fontSize: 12, fontWeight: '800', lineHeight: 18 },
+  unionEvidenceList: { gap: 5 },
+  unionEvidenceRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 7 },
+  unionEvidenceDot: { width: 5, height: 5, borderRadius: 2.5, marginTop: 6 },
+  unionEvidenceText: { flex: 1, fontSize: 11, fontWeight: '700', lineHeight: 17 },
   resultInfoCard: {
     minHeight: 160,
     borderRadius: 14,

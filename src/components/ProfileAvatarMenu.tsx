@@ -101,7 +101,6 @@ export function ProfileAvatarMenu({ navigation }: Props) {
   };
 
   const avatarOpacity = progress.interpolate({ inputRange: [0, 0.45, 1], outputRange: [1, 0, 0] });
-  const avatarScale = progress.interpolate({ inputRange: [0, 1], outputRange: [1, 0.74] });
 
   return (
     <View pointerEvents="box-none" style={StyleSheet.absoluteFill}>
@@ -118,7 +117,8 @@ export function ProfileAvatarMenu({ navigation }: Props) {
           {selectedProfile?.avatarUri ? (
             <Animated.Image
               source={{ uri: selectedProfile.avatarUri }}
-              style={[styles.avatarImage, { opacity: avatarOpacity, transform: [{ scale: avatarScale }] }]}
+              resizeMode="cover"
+              style={[styles.avatarImage, { opacity: avatarOpacity }]}
             />
           ) : (
             <Animated.Text
@@ -128,7 +128,6 @@ export function ProfileAvatarMenu({ navigation }: Props) {
                 {
                   color: visible && !darkMode ? colors.inverseText : colors.text,
                   opacity: avatarOpacity,
-                  transform: [{ scale: avatarScale }],
                 },
               ]}
             >
@@ -175,7 +174,7 @@ export function ProfileAvatarMenu({ navigation }: Props) {
                   <Pressable style={styles.item} onPress={() => selectProfile(profile)}>
                     <View style={[styles.profileOptionAvatar, { backgroundColor: darkMode ? '#2a2a2f' : '#f1f1f1' }]}>
                       {profile.avatarUri ? (
-                        <Image source={{ uri: profile.avatarUri }} style={styles.profileOptionAvatarImage} />
+                        <Image source={{ uri: profile.avatarUri }} resizeMode="cover" style={styles.profileOptionAvatarImage} />
                       ) : (
                         <Text style={[styles.profileOptionAvatarText, { color: colors.text }]}>{profileInitial(profile.name)}</Text>
                       )}
@@ -225,8 +224,12 @@ const styles = StyleSheet.create({
   avatarButtonActive: { backgroundColor: '#000' },
   avatarImage: {
     position: 'absolute',
-    width: 40,
-    height: 40,
+    left: 0,
+    top: 0,
+    right: 0,
+    bottom: 0,
+    width: '100%',
+    height: '100%',
     borderRadius: 20,
   },
   avatarText: {
@@ -270,8 +273,8 @@ const styles = StyleSheet.create({
   manageItemEn: { height: 58, alignItems: 'flex-start', paddingTop: 10, paddingBottom: 9 },
   icon: { width: 22, alignItems: 'center', justifyContent: 'center' },
   profileOptionAvatar: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
-  profileOptionAvatarImage: { width: 24, height: 24, borderRadius: 12 },
-  profileOptionAvatarText: { fontSize: 10, fontWeight: '900', lineHeight: 12 },
+  profileOptionAvatarImage: { width: 36, height: 36, borderRadius: 18 },
+  profileOptionAvatarText: { fontSize: 14, fontWeight: '900', lineHeight: 14 },
   itemTextWrap: { flex: 1 },
   text: { color: '#111', fontSize: 14, fontWeight: '900' },
   detail: { color: '#777', fontSize: 10, fontWeight: '700', marginTop: 2 },

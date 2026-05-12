@@ -7,7 +7,8 @@ import { AppMoreMenu } from '../components/AppMoreMenu';
 import { LineIcon } from '../components/LineIcon';
 import { DivinationProfile } from '../domain/types';
 import { RootStackParamList } from '../navigation/types';
-import { deleteProfile, listProfiles, profileInitial, PROFILE_RELATION_TAGS, saveProfiles, setSelectedProfileId, updateProfile } from '../storage/profileStore';
+import { uploadPickedAvatar } from '../services/avatarUpload';
+import { createProfile, deleteProfile, listProfiles, profileInitial, PROFILE_RELATION_TAGS, setSelectedProfileId, updateProfile } from '../storage/profileStore';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useAppTheme } from '../theme/AppTheme';
 import { TranslationKey, useAppLanguage } from '../i18n/AppLanguage';
@@ -520,6 +521,7 @@ export function ArchiveCenterScreen({ route, navigation }: Props) {
   const [editingProfile, setEditingProfile] = useState<DivinationProfile | undefined>();
   const [editingMode, setEditingMode] = useState<EditingMode>('edit');
   const [editModalVisible, setEditModalVisible] = useState(false);
+  const [avatarUploading, setAvatarUploading] = useState(false);
   const [deletingProfileIds, setDeletingProfileIds] = useState<string[]>([]);
   const [birthdayPickerExpanded, setBirthdayPickerExpanded] = useState(false);
   const [birthdayPickerVisible, setBirthdayPickerVisible] = useState(false);
@@ -607,7 +609,7 @@ export function ArchiveCenterScreen({ route, navigation }: Props) {
       id: `profile-${Date.now()}`,
       name: `${t('archive.defaultName')}${nextIndex}`,
       relation: '其他',
-      gender: '其他',
+      gender: '未填写',
       birthday: '未填写',
     }, 'create');
   };
@@ -641,7 +643,7 @@ export function ArchiveCenterScreen({ route, navigation }: Props) {
   };
 
   const closeEditProfile = () => {
-    if (editModalClosingRef.current) return;
+    if (editModalClosingRef.current || avatarUploading) return;
     editModalClosingRef.current = true;
     Keyboard.dismiss();
     editModalProgress.stopAnimation();
@@ -708,15 +710,16 @@ export function ArchiveCenterScreen({ route, navigation }: Props) {
       birthday: editingProfile.birthday.trim() || '未填写',
     };
     if (editingMode === 'create') {
-      const nextProfiles = [...profiles, normalizedProfile];
-      await saveProfiles(nextProfiles);
+      const createdProfile = await createProfile(normalizedProfile);
+      const nextProfiles = [...profiles, createdProfile];
       setProfiles(nextProfiles);
-      await setSelectedProfileId(normalizedProfile.id);
+      await setSelectedProfileId(createdProfile.id);
+      setExpandedId(createdProfile.id);
     } else {
-      await updateProfile(normalizedProfile);
-      setProfiles((current) => current.map((profile) => (profile.id === normalizedProfile.id ? normalizedProfile : profile)));
+      const updatedProfile = await updateProfile(normalizedProfile);
+      setProfiles((current) => current.map((profile) => (profile.id === normalizedProfile.id ? updatedProfile : profile)));
+      setExpandedId(updatedProfile.id);
     }
-    setExpandedId(normalizedProfile.id);
     closeEditProfile();
   };
 
@@ -754,7 +757,16 @@ export function ArchiveCenterScreen({ route, navigation }: Props) {
       quality: 0.86,
     });
     if (!result.canceled && result.assets[0]?.uri) {
-      setEditingProfile((current) => current ? { ...current, avatarUri: result.assets[0].uri } : current);
+      setAvatarUploading(true);
+      try {
+        const avatarUrl = await uploadPickedAvatar(result.assets[0]);
+        if (avatarUrl) setEditingProfile((current) => current ? { ...current, avatarUri: avatarUrl } : current);
+      } catch (error) {
+        Alert.alert(t('profileEdit.avatarSaveFailedTitle'), t('profileEdit.avatarSaveFailedBody'));
+        console.warn('Avatar upload failed.', error);
+      } finally {
+        setAvatarUploading(false);
+      }
     }
   };
 
@@ -822,11 +834,12 @@ export function ArchiveCenterScreen({ route, navigation }: Props) {
             </View>
             <ScrollView ref={editScrollRef} style={styles.editModalScroll} showsVerticalScrollIndicator={false} contentContainerStyle={styles.editModalContent}>
             {editingProfile && editingProfile.id !== 'self' ? (
-              <Pressable style={styles.avatarEditCenter} onPress={pickAvatarFromLibrary}>
+              <Pressable style={styles.avatarEditCenter} onPress={pickAvatarFromLibrary} disabled={avatarUploading}>
                 <ProfileAvatar profile={editingProfile} size={84} />
                 <View style={[styles.avatarCameraBadge, { backgroundColor: darkMode ? '#050505' : colors.inverse, borderColor: colors.card }]}>
                   <LineIcon name="camera" size={13} color="#fff" />
                 </View>
+                {avatarUploading ? <Text style={styles.avatarUploadingText}>上传中</Text> : null}
               </Pressable>
             ) : null}
             <View style={styles.editField}>
@@ -860,7 +873,7 @@ export function ArchiveCenterScreen({ route, navigation }: Props) {
             <View style={styles.editField}>
               <Text style={[styles.editLabel, { color: colors.mutedText }]}>{t('profileEdit.gender')}</Text>
               <View style={styles.genderRow}>
-                {(['男', '女', '其他'] as const).map((gender) => (
+                {(['男', '女', '未填写'] as const).map((gender) => (
                   <AnimatedChoiceTag
                     key={gender}
                     label={t(genderLabelKey(gender))}
@@ -1080,6 +1093,7 @@ const styles = StyleSheet.create({
   editModalContent: { paddingTop: 14, gap: 14, paddingBottom: 16 },
   avatarEditCenter: { alignSelf: 'center', alignItems: 'center', marginTop: 2, marginBottom: 4, position: 'relative' },
   avatarCameraBadge: { position: 'absolute', right: 1, bottom: 1, width: 26, height: 26, borderRadius: 13, backgroundColor: '#111', borderWidth: 2, borderColor: '#fff', alignItems: 'center', justifyContent: 'center' },
+  avatarUploadingText: { position: 'absolute', left: 0, right: 0, bottom: 30, color: '#fff', fontSize: 11, fontWeight: '900', textAlign: 'center' },
   editField: { gap: 7 },
   editLabel: { color: '#555', fontSize: 12, fontWeight: '900' },
   editInput: { height: 44, borderRadius: 14, backgroundColor: '#f4f4f4', paddingHorizontal: 13, color: '#111', fontSize: 14, fontWeight: '800' },

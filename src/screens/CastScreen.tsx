@@ -6,6 +6,7 @@ import { FortuneCoin } from '../components/FortuneCoin';
 import { useAppTheme } from '../theme/AppTheme';
 import { RootStackParamList } from '../navigation/types';
 import { TranslationKey, useAppLanguage } from '../i18n/AppLanguage';
+import { createRecordId } from '../services/fortuneService';
 import {
   analyzeHexagram,
   buildLunarInfo,
@@ -223,7 +224,7 @@ export function CastScreen({ navigation, route }: Props) {
     setTimeout(() => {
       navigation.replace('Analysis', {
         record: {
-          id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+          id: createRecordId(),
           question,
           createdAt: castAt.toISOString(),
           profile,

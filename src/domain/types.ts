@@ -89,8 +89,45 @@ export type SpiritAnalysis = {
   lineIndex?: number;
   isHidden?: boolean;
   color?: string;
+  verdict: string;
+  strengthLabel: string;
+  evidenceTags: string[];
   reason: string;
   detail: string;
+};
+
+export type UnionLineRef = {
+  index: number;
+  positionName: string;
+  branch: string;
+  element: string;
+  sixKin: string;
+  moving: boolean;
+  role: LineRole;
+  specialStatus?: '月破' | '暗动' | '旬空';
+  source: 'line' | 'day' | 'month';
+};
+
+export type UnionPattern = {
+  id: string;
+  kind: '三合' | '半合' | '六合' | '六冲' | '卦象';
+  name: string;
+  element?: string;
+  status: '成势' | '待引' | '合住' | '冲破' | '提示';
+  verdict: string;
+  impact: string;
+  relationToUseGod: string;
+  participants: UnionLineRef[];
+  evidence: string[];
+  weakPoints: string[];
+};
+
+export type UnionAnalysis = {
+  verdict: string;
+  summary: string;
+  dominantElement?: string;
+  patterns: UnionPattern[];
+  rules: string[];
 };
 
 export type AnalysisResult = {
@@ -104,10 +141,36 @@ export type AnalysisResult = {
   strength: string;
   relation: string;
   sanHe: string;
+  unionAnalysis: UnionAnalysis;
   flyingHidden: string;
   progression: string;
   items: AnalysisItem[];
   summary: string;
+  aiReadingStructured?: AIReading;
+};
+
+export type AIReadingTimelineItem = {
+  type: 'cast' | 'expected' | 'note' | string;
+  label: string;
+  time_text: string;
+  detail?: string | null;
+};
+
+export type AIReadingPoint = {
+  claim: string;
+  evidence: string[];
+  explanation: string;
+};
+
+export type AIReading = {
+  verdict: string;
+  expected_time_text?: string | null;
+  timeline: AIReadingTimelineItem[];
+  points: AIReadingPoint[];
+  status: string;
+  generated_at?: string;
+  model?: string | null;
+  lang?: 'zh' | 'en' | null;
 };
 
 export type FortuneRecord = {
@@ -130,9 +193,10 @@ export type FortuneRecord = {
 
 export type DivinationProfile = {
   id: string;
+  remoteId?: string;
   name: string;
   relation: string;
-  gender: '男' | '女' | '其他';
+  gender: '男' | '女' | '未填写';
   birthday: string;
   avatarUri?: string;
 };

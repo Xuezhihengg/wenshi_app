@@ -1,20 +1,23 @@
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
+import { CommonActions, useFocusEffect } from '@react-navigation/native';
 import * as ImagePicker from 'expo-image-picker';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, Animated, Easing, Image, Keyboard, Modal, PanResponder, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { clearStoredLogin, CurrentUser, deactivateAccount, disableGuestMode, getCurrentUser, isGuestMode } from '../api/client';
+import { alertGuestRequiresLogin } from '../utils/guestPrompt';
 import { LineIcon, LineIconName } from '../components/LineIcon';
 import { RootStackParamList } from '../navigation/types';
-import { getUserProfile, saveUserProfile, UserProfile } from '../storage/userProfileStore';
+import { clearLocalUserProfile, getUserProfile, saveUserProfile, UserProfile } from '../storage/userProfileStore';
+import { uploadPickedAvatar } from '../services/avatarUpload';
 import { useAppTheme } from '../theme/AppTheme';
 import { TranslationKey, useAppLanguage } from '../i18n/AppLanguage';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'ProfileEdit'>;
 type CalendarMode = 'solar' | 'lunar';
 type ProfileField = 'nickname' | 'gender' | 'birthday';
-type RegisterProvider = 'phone' | 'email' | 'wechat' | 'apple';
 
-const GENDERS: UserProfile['gender'][] = ['未设置', '男', '女'];
+const GENDERS: UserProfile['gender'][] = ['未填写', '男', '女'];
 const YEARS = Array.from({ length: 81 }, (_, index) => 1960 + index);
 const SOLAR_MONTHS = Array.from({ length: 12 }, (_, index) => `${index + 1}月`);
 const SOLAR_DAYS = Array.from({ length: 31 }, (_, index) => `${index + 1}日`);
@@ -77,24 +80,8 @@ const BASE_INFO: Array<{ field: ProfileField; icon: LineIconName; titleKey: Tran
   { field: 'birthday', icon: 'calendar', titleKey: 'profileEdit.birthday' },
 ];
 
-function getMockRegisterProvider(): RegisterProvider {
-  return 'wechat';
-}
-
-const MOCK_REGISTER_PROVIDER = getMockRegisterProvider();
-
-const BINDING_INFO: Array<{ key: 'phone' | 'email' | 'wechat' | 'apple'; icon: LineIconName; titleKey: TranslationKey; bound: boolean; bindable: boolean }> = [
-  { key: 'phone', icon: 'phone', titleKey: 'bind.phone', bound: MOCK_REGISTER_PROVIDER === 'phone', bindable: true },
-  { key: 'email', icon: 'mail', titleKey: 'bind.email', bound: MOCK_REGISTER_PROVIDER === 'email', bindable: true },
-  { key: 'wechat', icon: 'wechat', titleKey: 'profileEdit.wechat', bound: MOCK_REGISTER_PROVIDER === 'wechat', bindable: false },
-  { key: 'apple', icon: 'apple', titleKey: 'profileEdit.appleId', bound: MOCK_REGISTER_PROVIDER === 'apple', bindable: false },
-];
-
-const SECURITY_INFO: Array<{ icon: LineIconName; titleKey: TranslationKey; valueKey?: TranslationKey; value: string }> = [
-  { icon: 'tag', titleKey: 'profileEdit.userId', value: 'QW-20260501' },
-  { icon: 'calendar', titleKey: 'profileEdit.registerTime', value: '2026-05-01' },
-  { icon: 'shield', titleKey: 'profileEdit.loginMethod', valueKey: 'profileEdit.wechat', value: '微信' },
-];
+type BindingInfo = { key: 'phone' | 'email' | 'wechat' | 'apple'; icon: LineIconName; titleKey: TranslationKey; bound: boolean; bindable: boolean };
+type SecurityInfo = { icon: LineIconName; titleKey: TranslationKey; value: string };
 
 function applyBirthdayStringToPicker(
   birthday: string,
@@ -145,6 +132,68 @@ function formatBirthdayForDisplay(value: string, language: 'zh' | 'en', t: (key:
     return `${t('profileEdit.lunar')} ${numberFromChineseUnit(yearValue, '年')}, ${LUNAR_MONTH_EN[monthValue] ?? monthValue} ${LUNAR_DAY_EN[dayValue] ?? dayValue} ${hourValue}`;
   }
   return value;
+}
+
+function maskPhone(phone?: string | null) {
+  if (!phone) return '';
+  return phone.replace(/^(\d{3})\d{4}(\d+)/, '$1****$2');
+}
+
+function maskEmail(email?: string | null) {
+  if (!email) return '';
+  const [name, domain] = email.split('@');
+  if (!name || !domain) return email;
+  const visible = name.length <= 2 ? name.slice(0, 1) : `${name.slice(0, 2)}***${name.slice(-1)}`;
+  return `${visible}@${domain}`;
+}
+
+function shortId(id?: string) {
+  if (!id) return '—';
+  return id.length > 12 ? `${id.slice(0, 8)}…${id.slice(-4)}` : id;
+}
+
+function formatDateTime(value?: string | null) {
+  if (!value) return '—';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  const year = date.getFullYear();
+  const month = `${date.getMonth() + 1}`.padStart(2, '0');
+  const day = `${date.getDate()}`.padStart(2, '0');
+  const hour = `${date.getHours()}`.padStart(2, '0');
+  const minute = `${date.getMinutes()}`.padStart(2, '0');
+  return `${year}-${month}-${day} ${hour}:${minute}`;
+}
+
+function providerLabel(provider?: CurrentUser['register_provider']) {
+  if (provider === 'phone') return '手机号';
+  if (provider === 'email') return '邮箱';
+  if (provider === 'wechat') return '微信';
+  if (provider === 'apple') return 'Apple';
+  return '—';
+}
+
+function bindingInfoFor(user?: CurrentUser): BindingInfo[] {
+  return [
+    { key: 'phone', icon: 'phone', titleKey: 'bind.phone', bound: Boolean(user?.phone), bindable: true },
+    { key: 'email', icon: 'mail', titleKey: 'bind.email', bound: Boolean(user?.email), bindable: true },
+    { key: 'wechat', icon: 'wechat', titleKey: 'profileEdit.wechat', bound: Boolean(user?.wechat_id), bindable: false },
+    { key: 'apple', icon: 'apple', titleKey: 'profileEdit.appleId', bound: Boolean(user?.apple_id), bindable: false },
+  ];
+}
+
+function bindingValueFor(user: CurrentUser | undefined, key: BindingInfo['key'], t: (key: TranslationKey) => string) {
+  if (key === 'phone') return user?.phone ? maskPhone(user.phone) : t('common.unbound');
+  if (key === 'email') return user?.email ? maskEmail(user.email) : t('common.unbound');
+  if (key === 'wechat') return user?.wechat_id ? t('common.bound') : t('common.unbound');
+  return user?.apple_id ? t('common.bound') : t('common.unbound');
+}
+
+function securityInfoFor(user?: CurrentUser): SecurityInfo[] {
+  return [
+    { icon: 'tag', titleKey: 'profileEdit.userId', value: shortId(user?.id) },
+    { icon: 'calendar', titleKey: 'profileEdit.registerTime', value: formatDateTime(user?.created_at) },
+    { icon: 'shield', titleKey: 'profileEdit.loginMethod', value: providerLabel(user?.register_provider) },
+  ];
 }
 
 function calendarPickerDisplayValue(value: string, language: 'zh' | 'en') {
@@ -345,7 +394,9 @@ export function ProfileEditScreen({ navigation }: Props) {
   const [nicknameDraft, setNicknameDraft] = useState('未命名用户');
   const [avatarUri, setAvatarUri] = useState<string | undefined>();
   const [avatarPickerVisible, setAvatarPickerVisible] = useState(false);
-  const [gender, setGender] = useState<UserProfile['gender']>('未设置');
+  const [avatarUploading, setAvatarUploading] = useState(false);
+  const [gender, setGender] = useState<UserProfile['gender']>('未填写');
+  const [savedBirthday, setSavedBirthday] = useState('未填写');
   const [calendarMode, setCalendarMode] = useState<CalendarMode>('solar');
   const calendarSwitchProgress = useRef(new Animated.Value(0)).current;
   const [birthdayVisible, setBirthdayVisible] = useState(false);
@@ -360,6 +411,21 @@ export function ProfileEditScreen({ navigation }: Props) {
   const [deleteAccountVisible, setDeleteAccountVisible] = useState(false);
   const [deleteConfirmText, setDeleteConfirmText] = useState('');
   const [deleteReason, setDeleteReason] = useState('');
+  const [deletingAccount, setDeletingAccount] = useState(false);
+  const [currentUser, setCurrentUser] = useState<CurrentUser>();
+  const [guestMode, setGuestMode] = useState(false);
+  useEffect(() => { isGuestMode().then(setGuestMode); }, []);
+  const goToLoginFresh = async () => {
+    await Promise.all([clearStoredLogin(), disableGuestMode()]);
+    navigation.dispatch(CommonActions.reset({ index: 0, routes: [{ name: 'Login' }] }));
+  };
+  const handleBindPress = async (channel: 'phone' | 'email') => {
+    if (await isGuestMode()) {
+      alertGuestRequiresLogin('bind', t, goToLoginFresh);
+      return;
+    }
+    navigation.navigate(channel === 'phone' ? 'PhoneBind' : 'EmailBind');
+  };
   const deleteConfirmProgress = useRef(new Animated.Value(0)).current;
   const edgeBackPanResponder = useRef(
     PanResponder.create({
@@ -392,13 +458,16 @@ export function ProfileEditScreen({ navigation }: Props) {
   const lunarBirthday = language === 'en'
     ? `${t('profileEdit.lunar')} ${numberFromChineseUnit(year, '年')}, ${LUNAR_MONTH_EN[lunarMonth] ?? lunarMonth} ${LUNAR_DAY_EN[lunarDay] ?? lunarDay} ${lunarHour}`
     : `农历 ${year} ${lunarMonth} ${lunarDay} ${lunarHour}`;
-  const birthday = `${calendarMode === 'solar' ? '公历' : '农历'} ${year} ${month} ${day} ${hour}`;
+  const pickerBirthday = `${calendarMode === 'solar' ? '公历' : '农历'} ${year} ${month} ${day} ${hour}`;
+  const birthday = savedBirthday;
   const displayCalendarValue = (value: string) => calendarPickerDisplayValue(value, language);
   const deleteConfirmed = deleteConfirmText.trim() === '确认注销';
   const deleteConfirmButtonColor = deleteConfirmProgress.interpolate({
     inputRange: [0, 1],
     outputRange: [colors.faintText, '#c23a2b'],
   });
+  const bindingInfo = bindingInfoFor(currentUser);
+  const securityInfo = securityInfoFor(currentUser);
 
   useEffect(() => {
     Animated.timing(calendarSwitchProgress, {
@@ -425,9 +494,30 @@ export function ProfileEditScreen({ navigation }: Props) {
   };
 
   const closeDeleteAccountPrompt = () => {
+    if (deletingAccount) return;
     setDeleteAccountVisible(false);
     setDeleteConfirmText('');
     setDeleteReason('');
+  };
+
+  const confirmDeactivateAccount = async () => {
+    if (!deleteConfirmed || deletingAccount) return;
+    setDeletingAccount(true);
+    try {
+      await deactivateAccount(deleteReason);
+      await Promise.all([clearStoredLogin(), clearLocalUserProfile()]);
+      setDeleteAccountVisible(false);
+      navigation.dispatch(
+        CommonActions.reset({
+          index: 0,
+          routes: [{ name: 'Login' }],
+        })
+      );
+    } catch (error) {
+      Alert.alert(t('profileEdit.deactivateFailedTitle'), error instanceof Error && error.message.includes('401') ? t('profileEdit.deactivateFailedExpired') : t('profileEdit.deactivateFailedBody'));
+    } finally {
+      setDeletingAccount(false);
+    }
   };
 
   const toggleEditing = () => {
@@ -444,28 +534,61 @@ export function ProfileEditScreen({ navigation }: Props) {
   };
 
   useEffect(() => {
-    getUserProfile().then((profile) => {
-      setNickname(profile.nickname);
-      setNicknameDraft(profile.nickname);
-      setGender(profile.gender);
-      setAvatarUri(profile.avatarUri);
-      applyBirthdayStringToPicker(profile.birthday, {
-        setCalendarMode,
-        setYear,
-        setSolarMonth,
-        setSolarDay,
-        setSolarHour,
-        setLunarMonth,
-        setLunarDay,
-        setLunarHour,
-      });
-    });
+    Promise.all([
+      getUserProfile().then((profile) => {
+        setNickname(profile.nickname);
+        setNicknameDraft(profile.nickname);
+        setGender(profile.gender);
+        setAvatarUri(profile.avatarUri);
+        setSavedBirthday(profile.birthday);
+        if (profile.birthday !== '未填写') {
+          applyBirthdayStringToPicker(profile.birthday, {
+            setCalendarMode,
+            setYear,
+            setSolarMonth,
+            setSolarDay,
+            setSolarHour,
+            setLunarMonth,
+            setLunarDay,
+            setLunarHour,
+          });
+        }
+      }),
+      getCurrentUser().then(setCurrentUser).catch((error) => {
+        console.warn('Current user unavailable.', error);
+      }),
+    ]);
   }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      getCurrentUser().then(setCurrentUser).catch((error) => {
+        console.warn('Current user unavailable.', error);
+      });
+    }, [])
+  );
 
   useEffect(() => {
     if (!editing) return;
     saveUserProfile({ nickname, gender, birthday, avatarUri });
   }, [avatarUri, birthday, editing, gender, nickname]);
+
+  const saveSelectedAvatar = async (asset?: ImagePicker.ImagePickerAsset) => {
+    if (!asset?.uri) return;
+    setAvatarUploading(true);
+    try {
+      const avatarUrl = await uploadPickedAvatar(asset);
+      if (!avatarUrl) return;
+      setAvatarUri(avatarUrl);
+      await saveUserProfile({ nickname, gender, birthday, avatarUri: avatarUrl });
+      setAvatarPickerVisible(false);
+    } catch (error) {
+      Alert.alert(t('profileEdit.avatarSaveFailedTitle'), t('profileEdit.avatarSaveFailedBody'));
+      console.warn('Avatar upload failed.', error);
+    } finally {
+      setAvatarUploading(false);
+    }
+  };
 
   const selectAvatarFromLibrary = async () => {
     const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -479,12 +602,7 @@ export function ProfileEditScreen({ navigation }: Props) {
       aspect: [1, 1],
       quality: 0.85,
     });
-    if (!result.canceled) {
-      const nextAvatarUri = result.assets[0]?.uri;
-      setAvatarUri(nextAvatarUri);
-      saveUserProfile({ nickname, gender, birthday, avatarUri: nextAvatarUri });
-      setAvatarPickerVisible(false);
-    }
+    if (!result.canceled) await saveSelectedAvatar(result.assets[0]);
   };
 
   const takeAvatarPhoto = async () => {
@@ -498,12 +616,7 @@ export function ProfileEditScreen({ navigation }: Props) {
       aspect: [1, 1],
       quality: 0.85,
     });
-    if (!result.canceled) {
-      const nextAvatarUri = result.assets[0]?.uri;
-      setAvatarUri(nextAvatarUri);
-      saveUserProfile({ nickname, gender, birthday, avatarUri: nextAvatarUri });
-      setAvatarPickerVisible(false);
-    }
+    if (!result.canceled) await saveSelectedAvatar(result.assets[0]);
   };
 
   const switchCalendarMode = (mode: CalendarMode) => {
@@ -518,7 +631,7 @@ export function ProfileEditScreen({ navigation }: Props) {
       if (gender === '女') return t('profileEdit.genderFemale');
       return t('profileEdit.genderUnset');
     }
-    return formatBirthdayForDisplay(birthday, language, t);
+    return formatBirthdayForDisplay(savedBirthday, language, t);
   };
 
   const renderBaseEditor = (field: ProfileField) => {
@@ -540,7 +653,7 @@ export function ProfileEditScreen({ navigation }: Props) {
     }
     return (
       <Pressable style={[styles.dateValueButton, { backgroundColor: colors.cardMuted }]} onPress={() => setBirthdayVisible(true)}>
-        <Text numberOfLines={1} style={[styles.dateValueText, { color: colors.text }]}>{formatBirthdayForDisplay(birthday, language, t)}</Text>
+        <Text numberOfLines={1} style={[styles.dateValueText, { color: colors.text }]}>{formatBirthdayForDisplay(savedBirthday, language, t)}</Text>
       </Pressable>
     );
   };
@@ -564,14 +677,23 @@ export function ProfileEditScreen({ navigation }: Props) {
 
       <ScrollView style={styles.scroll} showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
         <View style={[styles.profileCard, { backgroundColor: colors.card }]}>
-          <Pressable style={styles.avatar} onPress={() => setAvatarPickerVisible(true)}>
+          <Pressable style={styles.avatar} onPress={() => editing && setAvatarPickerVisible(true)} disabled={!editing}>
             {avatarUri ? <Image source={{ uri: avatarUri }} style={styles.avatarImage} /> : <Text style={styles.avatarText}>问</Text>}
-            <View style={[styles.avatarCameraBadge, { backgroundColor: darkMode ? '#050505' : colors.inverse, borderColor: colors.card }]}>
-              <LineIcon name="edit" size={12} color="#fff" />
-            </View>
+            {editing ? (
+              <View style={[styles.avatarCameraBadge, { backgroundColor: darkMode ? '#050505' : colors.inverse, borderColor: colors.card }]}>
+                <LineIcon name="edit" size={12} color="#fff" />
+              </View>
+            ) : null}
           </Pressable>
           <Text style={[styles.userName, { color: colors.text }]}>{nickname}</Text>
         </View>
+
+        {guestMode ? (
+          <View style={[styles.guestNotice, { backgroundColor: darkMode ? '#3a2f1b' : '#fff5dc', borderColor: darkMode ? '#5a4625' : '#f1d684' }]}>
+            <Text style={[styles.guestNoticeTitle, { color: darkMode ? '#f5d796' : '#7a4f08' }]}>{t('profileEdit.guestNoticeTitle')}</Text>
+            <Text style={[styles.guestNoticeBody, { color: darkMode ? '#e7caa0' : '#86560f' }]}>{t('profileEdit.guestNoticeBody')}</Text>
+          </View>
+        ) : null}
 
         <InfoCard title={t('profileEdit.basicInfo')}>
           {BASE_INFO.map((item, index) => (
@@ -591,32 +713,32 @@ export function ProfileEditScreen({ navigation }: Props) {
         </InfoCard>
 
         <InfoCard title={t('profileEdit.accountBinding')}>
-          {BINDING_INFO.map((item, index) => (
+          {bindingInfo.map((item, index) => (
             <View key={item.key}>
               <StaticRow
                 icon={item.icon}
                 title={t(item.titleKey)}
-                value={item.bound ? t('common.bound') : t('common.unbound')}
+                value={bindingValueFor(currentUser, item.key, t)}
                 bound={item.bound}
                 bindable={item.bindable}
                 onBind={
                   item.key === 'phone'
-                    ? () => navigation.navigate('PhoneBind')
+                    ? () => handleBindPress('phone')
                     : item.key === 'email'
-                      ? () => navigation.navigate('EmailBind')
+                      ? () => handleBindPress('email')
                       : undefined
                 }
               />
-              {index < BINDING_INFO.length - 1 ? <View style={[styles.infoDivider, { backgroundColor: colors.divider }]} /> : null}
+              {index < bindingInfo.length - 1 ? <View style={[styles.infoDivider, { backgroundColor: colors.divider }]} /> : null}
             </View>
           ))}
         </InfoCard>
 
         <InfoCard title={t('profileEdit.accountSecurity')}>
-          {SECURITY_INFO.map((item, index) => (
+          {securityInfo.map((item, index) => (
             <View key={item.titleKey}>
-              <StaticRow icon={item.icon} title={t(item.titleKey)} value={item.valueKey ? t(item.valueKey) : item.value} />
-              {index < SECURITY_INFO.length - 1 ? <View style={[styles.infoDivider, { backgroundColor: colors.divider }]} /> : null}
+              <StaticRow icon={item.icon} title={t(item.titleKey)} value={item.value} />
+              {index < securityInfo.length - 1 ? <View style={[styles.infoDivider, { backgroundColor: colors.divider }]} /> : null}
             </View>
           ))}
         </InfoCard>
@@ -738,7 +860,13 @@ export function ProfileEditScreen({ navigation }: Props) {
                 {lunarBirthday}
               </Animated.Text>
             </View>
-            <Pressable style={[styles.confirmButton, { backgroundColor: colors.inverse }]} onPress={() => setBirthdayVisible(false)}>
+            <Pressable
+              style={[styles.confirmButton, { backgroundColor: colors.inverse }]}
+              onPress={() => {
+                setSavedBirthday(pickerBirthday);
+                setBirthdayVisible(false);
+              }}
+            >
               <Text style={[styles.confirmButtonText, { color: colors.inverseText }]}>{t('common.confirm')}</Text>
             </Pressable>
           </View>
@@ -746,20 +874,20 @@ export function ProfileEditScreen({ navigation }: Props) {
       </Modal>
       <Modal transparent visible={avatarPickerVisible} animationType="fade" onRequestClose={() => setAvatarPickerVisible(false)}>
         <View style={[styles.avatarModalBackdrop, { backgroundColor: colors.overlay }]}>
-          <Pressable style={StyleSheet.absoluteFill} onPress={() => setAvatarPickerVisible(false)} />
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setAvatarPickerVisible(false)} disabled={avatarUploading} />
           <View style={[styles.avatarModalCard, { backgroundColor: colors.card }]}>
             <Text style={[styles.avatarModalTitle, { color: colors.text }]}>{t('profileEdit.avatarTitle')}</Text>
             <View style={[styles.avatarModalDivider, { backgroundColor: colors.divider }]} />
-            <Pressable style={styles.avatarModalItem} onPress={takeAvatarPhoto}>
+            <Pressable style={styles.avatarModalItem} onPress={takeAvatarPhoto} disabled={avatarUploading}>
               <LineIcon name="camera" size={20} />
-              <Text style={[styles.avatarModalText, { color: colors.text }]}>{t('profileEdit.takePhoto')}</Text>
+              <Text style={[styles.avatarModalText, { color: colors.text }]}>{avatarUploading ? '上传中…' : t('profileEdit.takePhoto')}</Text>
             </Pressable>
             <View style={[styles.avatarModalDivider, { backgroundColor: colors.divider }]} />
-            <Pressable style={styles.avatarModalItem} onPress={selectAvatarFromLibrary}>
+            <Pressable style={styles.avatarModalItem} onPress={selectAvatarFromLibrary} disabled={avatarUploading}>
               <LineIcon name="image" size={20} />
-              <Text style={[styles.avatarModalText, { color: colors.text }]}>{t('profileEdit.chooseAlbum')}</Text>
+              <Text style={[styles.avatarModalText, { color: colors.text }]}>{avatarUploading ? '上传中…' : t('profileEdit.chooseAlbum')}</Text>
             </Pressable>
-            <Pressable style={[styles.avatarModalCancel, { backgroundColor: colors.control }]} onPress={() => setAvatarPickerVisible(false)}>
+            <Pressable style={[styles.avatarModalCancel, { backgroundColor: colors.control }]} onPress={() => setAvatarPickerVisible(false)} disabled={avatarUploading}>
               <Text style={[styles.avatarModalCancelText, { color: colors.text }]}>{t('common.cancel')}</Text>
             </Pressable>
           </View>
@@ -767,7 +895,7 @@ export function ProfileEditScreen({ navigation }: Props) {
       </Modal>
       <Modal transparent visible={deleteAccountVisible} animationType="fade" onRequestClose={closeDeleteAccountPrompt}>
         <View style={[styles.deleteModalBackdrop, { backgroundColor: colors.overlay }]}>
-          <Pressable style={StyleSheet.absoluteFill} onPress={closeDeleteAccountPrompt} />
+          <Pressable style={StyleSheet.absoluteFill} onPress={closeDeleteAccountPrompt} disabled={deletingAccount} />
           <Pressable style={[styles.deleteModalCard, { backgroundColor: colors.card }]} onPress={Keyboard.dismiss}>
             <View style={styles.deleteWarningIcon}>
               <LineIcon name="info" size={30} color="#c23a2b" />
@@ -802,18 +930,16 @@ export function ProfileEditScreen({ navigation }: Props) {
             </View>
 
             <View style={styles.deleteActions}>
-              <Pressable style={[styles.deleteActionButton, styles.deleteCancelButton, { backgroundColor: colors.control }]} onPress={closeDeleteAccountPrompt}>
+              <Pressable style={[styles.deleteActionButton, styles.deleteCancelButton, { backgroundColor: colors.control }]} onPress={closeDeleteAccountPrompt} disabled={deletingAccount}>
                 <Text style={[styles.deleteCancelText, { color: colors.text }]}>{t('common.cancel')}</Text>
               </Pressable>
               <Animated.View style={[styles.deleteActionButton, styles.deleteConfirmButton, { backgroundColor: deleteConfirmButtonColor }]}>
                 <Pressable
                   style={styles.deleteConfirmHitArea}
-                  onPress={() => {
-                    if (!deleteConfirmed) return;
-                    closeDeleteAccountPrompt();
-                  }}
+                  disabled={!deleteConfirmed || deletingAccount}
+                  onPress={confirmDeactivateAccount}
                 >
-                  <Text style={styles.deleteConfirmText}>{t('profileEdit.deleteAccount')}</Text>
+                  <Text style={styles.deleteConfirmText}>{deletingAccount ? '注销中…' : t('profileEdit.deleteAccount')}</Text>
                 </Pressable>
               </Animated.View>
             </View>
@@ -868,6 +994,9 @@ const styles = StyleSheet.create({
   scroll: { position: 'absolute', left: 0, right: 0, top: 104, bottom: 0 },
   content: { paddingTop: 8, paddingHorizontal: 18, paddingBottom: 26, gap: 14 },
   profileCard: { ...CARD_SHADOW, borderRadius: 24, backgroundColor: '#fff', paddingVertical: 24, alignItems: 'center', gap: 12 },
+  guestNotice: { borderRadius: 14, borderWidth: 1, paddingHorizontal: 16, paddingVertical: 12, gap: 4 },
+  guestNoticeTitle: { fontSize: 14, fontWeight: '900' },
+  guestNoticeBody: { fontSize: 12, fontWeight: '700', lineHeight: 18 },
   avatar: { width: 76, height: 76, borderRadius: 38, backgroundColor: '#000', alignItems: 'center', justifyContent: 'center', position: 'relative' },
   avatarImage: { width: 76, height: 76, borderRadius: 38 },
   avatarCameraBadge: {
