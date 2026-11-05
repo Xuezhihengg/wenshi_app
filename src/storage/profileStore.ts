@@ -2,6 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { DivinationProfile } from '../domain/types';
 import { createRemoteProfile, deleteRemoteProfile, listRemoteProfiles, selectRemoteProfile, updateRemoteProfile } from '../api/profiles';
 import { getUserProfile, syncUserProfileFromSelfArchive, userProfileToSelfArchive } from './userProfileStore';
+import { getEffectivePlanLimits } from '../services/membershipLimits';
 
 const PROFILES_KEY = 'wenshi.profiles';
 const SELECTED_PROFILE_KEY = 'wenshi.selectedProfileId';
@@ -134,6 +135,17 @@ export async function addProfile() {
 
 export async function createProfile(profile: DivinationProfile) {
   const profiles = await listProfiles();
+  const { limits, plan } = await getEffectivePlanLimits();
+  if (limits.profileLimit !== undefined && profiles.length >= limits.profileLimit) {
+    throw new Error(JSON.stringify({
+      detail: {
+        code: 'profile_limit_exceeded',
+        limit: limits.profileLimit,
+        used: profiles.length,
+        plan,
+      },
+    }));
+  }
   const normalizedProfile = normalizeProfile(profile);
   try {
     const created = await createRemoteProfile(normalizedProfile);

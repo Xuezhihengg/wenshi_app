@@ -1,7 +1,7 @@
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import * as Haptics from 'expo-haptics';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Animated, Easing, Keyboard, Pressable, SafeAreaView, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native';
+import { Animated, Easing, Keyboard, Platform, Pressable, SafeAreaView, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AppMoreMenu } from '../components/AppMoreMenu';
 import { useAppTheme } from '../theme/AppTheme';
@@ -302,6 +302,7 @@ export function QuestionScreen({ navigation }: Props) {
   const isCastTransitioning = useRef(false);
   const castTransitionFrame = useRef<number | null>(null);
   const castTransitionTimers = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const rootRef = useRef<View>(null);
   const inputFrameRef = useRef<View>(null);
   const transitionStageRegularTextRef = useRef<Text>(null);
   const transitionStageBoldTextRef = useRef<Text>(null);
@@ -523,7 +524,7 @@ export function QuestionScreen({ navigation }: Props) {
         toValue: 1,
         duration: Math.max(1500, nextText.length * 92),
         easing: Easing.inOut(Easing.cubic),
-        useNativeDriver: false,
+        useNativeDriver: Platform.OS === 'ios',
       }).start(({ finished: nextFinished }) => {
         if (!nextFinished || questionAnimationToken.current !== token) return;
         const queuedText = pendingQuestionText.current;
@@ -559,21 +560,43 @@ export function QuestionScreen({ navigation }: Props) {
     setEnteringQuestionText('');
     setExitingQuestionText('');
 
-    inputFrameRef.current?.measureInWindow((x, y) => {
-      const startRect = {
-        x: x + 16,
-        y: y + 12,
-        width: Math.min(screenWidth - 72, estimateInputTextWidth(castQuestion)),
-        height: 22,
-      };
-      setTransitionTextRect(startRect);
-      setShowCastTransitionQuestion(true);
-      requestAnimationFrame(() => runCastTransition(castQuestion, startRect));
-    });
+    const isAndroid = Platform.OS === 'android';
+    const measureAndRun = (rootX: number, rootY: number, rootWidth: number, rootHeight: number) => {
+      inputFrameRef.current?.measureInWindow((x, y, width) => {
+        const startRect = {
+          x: x - rootX + 16,
+          y: y - rootY + 12,
+          width: isAndroid ? Math.max(0, width - 32) : Math.min(screenWidth - 72, estimateInputTextWidth(castQuestion)),
+          height: 22,
+        };
+        const stageSize = isAndroid ? { width: rootWidth, height: rootHeight } : { width: screenWidth, height: screenHeight };
+        setTransitionTextRect(startRect);
+        setShowCastTransitionQuestion(true);
+        requestAnimationFrame(() => runCastTransition(castQuestion, startRect, stageSize));
+      });
+    };
 
-    const runCastTransition = (currentQuestion: string, startRect: Rect) => {
+    if (isAndroid) {
+      rootRef.current?.measureInWindow((rootX, rootY, rootWidth, rootHeight) => {
+        measureAndRun(rootX, rootY, rootWidth, rootHeight);
+      });
+    } else {
+      inputFrameRef.current?.measureInWindow((x, y, width) => {
+        const startRect = {
+          x: x + 16,
+          y: y + 12,
+          width: Math.min(screenWidth - 72, estimateInputTextWidth(castQuestion)),
+          height: 22,
+        };
+        setTransitionTextRect(startRect);
+        setShowCastTransitionQuestion(true);
+        requestAnimationFrame(() => runCastTransition(castQuestion, startRect, { width: screenWidth, height: screenHeight }));
+      });
+    }
+
+    const runCastTransition = (currentQuestion: string, startRect: Rect, stageSize: { width: number; height: number }) => {
       const safeHorizontalPadding = 32;
-      const finalWidth = screenWidth - safeHorizontalPadding * 2;
+      const finalWidth = stageSize.width - safeHorizontalPadding * 2;
       const textLength = Math.max(1, currentQuestion.length);
       const desiredFinalFontSize = 28;
       const maxFontByLength = Math.max(18, Math.min(desiredFinalFontSize, (finalWidth / Math.min(textLength, 18)) * 1.55));
@@ -585,14 +608,17 @@ export function QuestionScreen({ navigation }: Props) {
       const finalTextWidth = estimatedLines > 1 ? finalWidth : estimatedTextWidth;
       const hasWrappedFinalText = estimatedLines > 1;
       const finalRect = {
-        x: screenWidth / 2 - finalTextWidth / 2,
-        y: screenHeight / 2 - finalHeight / 2,
+        x: stageSize.width / 2 - finalTextWidth / 2,
+        y: stageSize.height / 2 - finalHeight / 2,
         width: finalTextWidth,
         height: finalHeight,
       };
+      const androidScale = finalFontSize / 16;
+      const androidTranslateX = finalRect.x - startRect.x;
+      const androidTranslateY = finalRect.y - startRect.y;
 
       const applyCastTransitionProgress = (value: number) => {
-        const baseOpacity = interpolateNumber(value, [0, 0.24, 1], [1, 0, 0]);
+        const baseOpacity = isAndroid ? interpolateNumber(value, [0, 0.08, 1], [1, 0, 0]) : interpolateNumber(value, [0, 0.24, 1], [1, 0, 0]);
         const textOpacity = interpolateNumber(value, [0, 0.82, 1], [1, 1, 0]);
         const moveProgress = interpolateNumber(value, [0.24, 0.82], [0, 1]);
         const boldProgress = interpolateNumber(value, [0.54, 0.72], [0, 1]);
@@ -604,6 +630,40 @@ export function QuestionScreen({ navigation }: Props) {
         const lineHeight = 22 + (finalLineHeight - 22) * moveProgress;
         const sharedStyle = { left, top, width, fontSize, lineHeight, textAlign: 'left' };
         setBaseContentOpacity(baseOpacity);
+        if (isAndroid) {
+          const transform = [
+            { translateX: androidTranslateX * moveProgress },
+            { translateY: androidTranslateY * moveProgress },
+            { scale: 1 + (androidScale - 1) * moveProgress },
+          ];
+          const androidSharedStyle = {
+            left: startRect.x,
+            top: startRect.y,
+            width: startRect.width,
+            fontSize: 16,
+            lineHeight: 22,
+            textAlign: 'left',
+            transform,
+          };
+          transitionStageRegularTextRef.current?.setNativeProps({
+            style: {
+              ...androidSharedStyle,
+              opacity: textOpacity * (1 - boldProgress),
+            },
+          });
+          transitionStageBoldTextRef.current?.setNativeProps({
+            style: {
+              ...androidSharedStyle,
+              opacity: textOpacity * boldProgress,
+            },
+          });
+          transitionStageFinalTextRef.current?.setNativeProps({
+            style: {
+              opacity: 0,
+            },
+          });
+          return;
+        }
         transitionStageRegularTextRef.current?.setNativeProps({
           style: {
             ...sharedStyle,
@@ -676,7 +736,7 @@ export function QuestionScreen({ navigation }: Props) {
   };
 
   return (
-    <SafeAreaView style={[styles.container, { backgroundColor: colors.card }]}>
+    <SafeAreaView ref={rootRef} style={[styles.container, { backgroundColor: colors.card }]}>
       <Pressable style={styles.dismissArea} onPress={Keyboard.dismiss}>
         <Animated.View
           style={[
@@ -814,7 +874,12 @@ export function QuestionScreen({ navigation }: Props) {
                 }}
                 placeholder={isQuestionAnimating || question ? '' : t('question.placeholder')}
                 placeholderTextColor={colors.faintText}
-                style={[styles.input, { color: colors.text }, question ? styles.inputHiddenText : null]}
+                style={[
+                  styles.input,
+                  { color: colors.text },
+                  question ? styles.inputHiddenText : null,
+                  Platform.OS === 'android' && (question || isQuestionAnimating || showQuestionOverlay) ? styles.androidInputHiddenText : null,
+                ]}
                 multiline
                 editable={!isQuestionAnimating && !isCastTransitionLocked}
                 pointerEvents={isQuestionAnimating || isCastTransitionLocked ? 'none' : 'auto'}
@@ -837,7 +902,7 @@ export function QuestionScreen({ navigation }: Props) {
                 </Animated.View>
               ) : null}
               {isQuestionAnimating || showQuestionOverlay ? (
-                <Animated.View pointerEvents="none" style={[styles.animatedQuestionLayer, { opacity: animationLayerOpacity }]}>
+                <Animated.View pointerEvents="none" style={[styles.animatedQuestionLayer, Platform.OS === 'android' ? styles.androidAnimatedQuestionLayer : null, { opacity: animationLayerOpacity }]}>
                   {!isQuestionAnimating && showQuestionOverlay ? displayQuestionCharacters.map((character, index) => (
                     <View key={`display-${character}-${index}`} style={styles.animatedCharacterWrap}>
                       <Text style={[styles.animatedQuestionText, styles.animatedCharacterMeasure]}>{character}</Text>
@@ -1018,6 +1083,7 @@ const styles = StyleSheet.create({
     fontWeight: '500',
   },
   inputHiddenText: { color: 'transparent' },
+  androidInputHiddenText: { opacity: 0 },
   inputMirrorLayer: {
     position: 'absolute',
     left: 16,
@@ -1043,6 +1109,7 @@ const styles = StyleSheet.create({
   transitionText: {
     position: 'absolute',
     color: '#000',
+    transformOrigin: 'top left',
   },
   animatedQuestionLayer: {
     position: 'absolute',
@@ -1051,6 +1118,10 @@ const styles = StyleSheet.create({
     top: 12,
     flexDirection: 'row',
     flexWrap: 'wrap',
+  },
+  androidAnimatedQuestionLayer: {
+    zIndex: 8,
+    elevation: 8,
   },
   animatedCharacterWrap: { position: 'relative', minWidth: 0, height: 22 },
   animatedQuestionText: { fontSize: 16, lineHeight: 22, fontWeight: '500' },

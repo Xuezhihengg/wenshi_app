@@ -3,7 +3,7 @@ import { CommonActions, useFocusEffect } from '@react-navigation/native';
 import * as ImagePicker from 'expo-image-picker';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Alert, Animated, Easing, Image, Keyboard, Modal, PanResponder, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Alert, Animated, Easing, Image, Keyboard, Modal, PanResponder, Platform, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { clearStoredLogin, CurrentUser, deactivateAccount, disableGuestMode, getCurrentUser, isGuestMode } from '../api/client';
 import { alertGuestRequiresLogin } from '../utils/guestPrompt';
 import { LineIcon, LineIconName } from '../components/LineIcon';
@@ -80,7 +80,7 @@ const BASE_INFO: Array<{ field: ProfileField; icon: LineIconName; titleKey: Tran
   { field: 'birthday', icon: 'calendar', titleKey: 'profileEdit.birthday' },
 ];
 
-type BindingInfo = { key: 'phone' | 'email' | 'wechat' | 'apple'; icon: LineIconName; titleKey: TranslationKey; bound: boolean; bindable: boolean };
+type BindingInfo = { key: 'phone' | 'email' | 'wechat' | 'apple' | 'google'; icon: LineIconName; titleKey: TranslationKey; bound: boolean; bindable: boolean };
 type SecurityInfo = { icon: LineIconName; titleKey: TranslationKey; value: string };
 
 function applyBirthdayStringToPicker(
@@ -169,23 +169,27 @@ function providerLabel(provider?: CurrentUser['register_provider']) {
   if (provider === 'email') return '邮箱';
   if (provider === 'wechat') return '微信';
   if (provider === 'apple') return 'Apple';
+  if (provider === 'google') return 'Google';
   return '—';
 }
 
 function bindingInfoFor(user?: CurrentUser): BindingInfo[] {
-  return [
+  const items: BindingInfo[] = [
     { key: 'phone', icon: 'phone', titleKey: 'bind.phone', bound: Boolean(user?.phone), bindable: true },
     { key: 'email', icon: 'mail', titleKey: 'bind.email', bound: Boolean(user?.email), bindable: true },
     { key: 'wechat', icon: 'wechat', titleKey: 'profileEdit.wechat', bound: Boolean(user?.wechat_id), bindable: false },
     { key: 'apple', icon: 'apple', titleKey: 'profileEdit.appleId', bound: Boolean(user?.apple_id), bindable: false },
+    { key: 'google', icon: 'google', titleKey: 'profileEdit.google', bound: Boolean(user?.google_id), bindable: false },
   ];
+  return Platform.OS === 'android' ? items.filter((item) => item.key !== 'apple') : items;
 }
 
 function bindingValueFor(user: CurrentUser | undefined, key: BindingInfo['key'], t: (key: TranslationKey) => string) {
   if (key === 'phone') return user?.phone ? maskPhone(user.phone) : t('common.unbound');
   if (key === 'email') return user?.email ? maskEmail(user.email) : t('common.unbound');
   if (key === 'wechat') return user?.wechat_id ? t('common.bound') : t('common.unbound');
-  return user?.apple_id ? t('common.bound') : t('common.unbound');
+  if (key === 'apple') return user?.apple_id ? t('common.bound') : t('common.unbound');
+  return user?.google_id ? t('common.bound') : t('common.unbound');
 }
 
 function securityInfoFor(user?: CurrentUser): SecurityInfo[] {
@@ -666,12 +670,14 @@ export function ProfileEditScreen({ navigation }: Props) {
     <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
       <View style={styles.edgeBackGestureArea} {...edgeBackPanResponder.panHandlers} />
       <View style={styles.topLayer} pointerEvents="box-none">
-        <Pressable style={[styles.backButton, { backgroundColor: colors.control }]} onPress={() => navigation.goBack()}>
-          <Text style={[styles.backButtonText, { color: colors.text }]}>‹</Text>
+        <Pressable style={[styles.backButton, { backgroundColor: '#fff' }]} onPress={() => navigation.goBack()}>
+          {Platform.OS === 'android' ? <LineIcon name="chevronLeft" size={25} color={colors.text} /> : <Text style={[styles.backButtonText, { color: colors.text }]}>‹</Text>}
         </Pressable>
         <Text pointerEvents="none" style={[styles.navTitle, { color: colors.text }]}>{t('profileEdit.title')}</Text>
-        <Pressable style={[styles.editButton, { backgroundColor: editing ? colors.inverse : colors.control }, editing ? styles.editButtonActive : null]} onPress={toggleEditing}>
-          <LineIcon name={editing ? 'check' : 'edit'} size={18} color={editing ? colors.inverseText : colors.text} />
+        <Pressable style={[styles.editButton, { backgroundColor: editing ? colors.inverse : '#fff' }, editing ? styles.editButtonActive : null]} onPress={toggleEditing}>
+          <View style={styles.headerIconCenter}>
+            <LineIcon name={editing ? 'check' : 'edit'} size={18} color={editing ? colors.inverseText : colors.text} />
+          </View>
         </Pressable>
       </View>
 
@@ -973,9 +979,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     zIndex: 42,
-    elevation: 42,
+    elevation: 4,
   },
-  backButtonText: { color: '#111', fontSize: 34, fontWeight: '500', lineHeight: 38, marginTop: -2 },
+  backButtonText: { color: '#111', fontSize: 34, fontWeight: '500', lineHeight: 38, marginTop: -2, ...Platform.select({ android: { lineHeight: 40, marginTop: 0, includeFontPadding: false, textAlignVertical: 'center' } }) },
   navTitle: { position: 'absolute', top: 69, left: 88, right: 88, color: '#111', fontSize: 17, fontWeight: '900', textAlign: 'center' },
   editButton: {
     position: 'absolute',
@@ -988,9 +994,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     zIndex: 42,
-    elevation: 42,
+    elevation: 4,
   },
   editButtonActive: { backgroundColor: '#000' },
+  headerIconCenter: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center', ...Platform.select({ android: { transform: [{ translateY: -0.5 }] } }) },
   scroll: { position: 'absolute', left: 0, right: 0, top: 104, bottom: 0 },
   content: { paddingTop: 8, paddingHorizontal: 18, paddingBottom: 26, gap: 14 },
   profileCard: { ...CARD_SHADOW, borderRadius: 24, backgroundColor: '#fff', paddingVertical: 24, alignItems: 'center', gap: 12 },

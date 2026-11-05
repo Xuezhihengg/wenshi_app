@@ -4,20 +4,18 @@ import { Platform } from 'react-native';
 const TOKEN_STORAGE_KEY = 'wenshi.api.tokens';
 const GUEST_MODE_KEY = 'wenshi.api.guestMode';
 const DEV_PHONE = '13800000001';
-const PROD_API_BASE_URL = 'https://wenshi.xin';
-const LAN_API_BASE_URL = 'http://172.20.10.12:8000';
 const LOCAL_API_BASE_URL = 'http://127.0.0.1:8000';
 const ANDROID_EMULATOR_API_BASE_URL = 'http://10.0.2.2:8000';
 const REQUEST_TIMEOUT_MS = 15000;
 
-const API_BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL
-  || (__DEV__
-    ? (Platform.OS === 'web'
-      ? LOCAL_API_BASE_URL
-      : Platform.OS === 'android'
-        ? ANDROID_EMULATOR_API_BASE_URL
-        : LAN_API_BASE_URL)
-    : PROD_API_BASE_URL);
+const CONFIGURED_API_BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL?.trim().replace(/\/+$/, '');
+const DEV_API_BASE_URL = Platform.OS === 'android' ? ANDROID_EMULATOR_API_BASE_URL : LOCAL_API_BASE_URL;
+const API_BASE_URL = CONFIGURED_API_BASE_URL || (__DEV__ ? DEV_API_BASE_URL : '');
+const ENABLE_DEV_LOGIN = __DEV__ && process.env.EXPO_PUBLIC_ENABLE_DEV_LOGIN !== '0';
+
+if (!API_BASE_URL) {
+  throw new Error('EXPO_PUBLIC_API_BASE_URL is required for production builds.');
+}
 
 type TokenPair = {
   access_token: string;
@@ -44,17 +42,23 @@ type AppleLoginPayload = {
   displayName?: string | null;
 };
 
+type GoogleLoginPayload = {
+  identityToken: string;
+};
+
 export type CurrentUser = {
   id: string;
   phone?: string | null;
   email?: string | null;
   apple_id?: string | null;
   wechat_id?: string | null;
+  google_id?: string | null;
   display_name: string;
   avatar_url?: string | null;
-  register_provider: 'phone' | 'email' | 'wechat' | 'apple';
+  register_provider: 'phone' | 'email' | 'wechat' | 'apple' | 'google';
   membership_plan: string;
   membership_status: string;
+  membership_expires_at?: string | null;
   profile_completed: boolean;
   created_at: string;
   last_login_at?: string | null;
@@ -118,6 +122,25 @@ export class GuestModeError extends Error {
   }
 }
 
+export class AuthRequiredError extends Error {
+  constructor(message = 'Authentication is required.') {
+    super(message);
+    this.name = 'AuthRequiredError';
+  }
+}
+
+export class ApiRequestError extends Error {
+  status: number;
+  detail?: Record<string, unknown>;
+
+  constructor(message: string, status: number, detail?: Record<string, unknown>) {
+    super(message);
+    this.name = 'ApiRequestError';
+    this.status = status;
+    this.detail = detail;
+  }
+}
+
 async function writeTokens(tokens: TokenPair) {
   await AsyncStorage.setItem(TOKEN_STORAGE_KEY, JSON.stringify({
     accessToken: tokens.access_token,
@@ -154,6 +177,22 @@ export async function loginWithApple(payload: AppleLoginPayload): Promise<LoginR
       identity_token: payload.identityToken,
       email: payload.email || null,
       display_name: payload.displayName || null,
+    }),
+  });
+  await writeTokens(tokens);
+  return {
+    accessToken: tokens.access_token,
+    refreshToken: tokens.refresh_token,
+    isNewUser: Boolean(tokens.is_new_user),
+    profileCompleted: Boolean(tokens.profile_completed),
+  };
+}
+
+export async function loginWithGoogle(payload: GoogleLoginPayload): Promise<LoginResult> {
+  const tokens = await request<TokenPair>('/api/v1/auth/login/google', {
+    method: 'POST',
+    body: JSON.stringify({
+      identity_token: payload.identityToken,
     }),
   });
   await writeTokens(tokens);
@@ -249,8 +288,21 @@ async function request<T>(path: string, options: RequestInit = {}, accessToken?:
       },
     });
     if (!response.ok) {
-      const message = await response.text();
-      throw new Error(message || `Request failed: ${response.status}`);
+      const text = await response.text();
+      let message = text;
+      let detail: Record<string, unknown> | undefined;
+      try {
+        const parsed = JSON.parse(text) as { detail?: unknown };
+        if (typeof parsed.detail === 'string') {
+          message = parsed.detail;
+        } else if (parsed.detail && typeof parsed.detail === 'object' && !Array.isArray(parsed.detail)) {
+          detail = parsed.detail as Record<string, unknown>;
+          if (typeof detail.message === 'string') message = detail.message;
+        }
+      } catch {
+        // Non-JSON error body: keep the raw text.
+      }
+      throw new ApiRequestError(message || `Request failed: ${response.status}`, response.status, detail);
     }
     if (response.status === 204) return undefined as T;
     return response.json() as Promise<T>;
@@ -265,6 +317,7 @@ async function request<T>(path: string, options: RequestInit = {}, accessToken?:
 }
 
 async function loginForDevelopment(): Promise<StoredTokens> {
+  if (!ENABLE_DEV_LOGIN) throw new AuthRequiredError('Development login is disabled.');
   const codeResponse = await request<{ mock_code?: string | null }>('/api/v1/auth/code', {
     method: 'POST',
     body: JSON.stringify({ destination: DEV_PHONE, channel: 'phone', purpose: 'login' }),
@@ -292,15 +345,30 @@ export async function authenticatedRequest<T>(path: string, options: RequestInit
     throw new GuestModeError();
   }
   let tokens = await readTokens();
-  if (!tokens) tokens = await loginForDevelopment();
+  if (!tokens) {
+    if (!ENABLE_DEV_LOGIN) throw new AuthRequiredError();
+    tokens = await loginForDevelopment();
+  }
   try {
     return await request<T>(path, options, tokens.accessToken);
   } catch (error) {
     const message = error instanceof Error ? error.message : '';
-    if (!message.includes('401') && !message.includes('Invalid token') && !message.includes('Missing bearer')) {
+    const unauthorized = error instanceof ApiRequestError && error.status === 401;
+    if (!unauthorized && !message.includes('401') && !message.includes('Invalid token') && !message.includes('Missing bearer')) {
       throw error;
     }
-    tokens = tokens.refreshToken ? await refreshTokens(tokens.refreshToken).catch(loginForDevelopment) : await loginForDevelopment();
+    if (tokens.refreshToken) {
+      try {
+        tokens = await refreshTokens(tokens.refreshToken);
+      } catch (refreshError) {
+        if (!ENABLE_DEV_LOGIN) throw refreshError;
+        tokens = await loginForDevelopment();
+      }
+    } else if (ENABLE_DEV_LOGIN) {
+      tokens = await loginForDevelopment();
+    } else {
+      throw new AuthRequiredError();
+    }
     return request<T>(path, options, tokens.accessToken);
   }
 }

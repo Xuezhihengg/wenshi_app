@@ -280,8 +280,8 @@ export function FeedbackScreen({ navigation }: Props) {
     <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
       <View style={styles.edgeBackGestureArea} {...edgeBackPanResponder.panHandlers} />
       <View style={styles.topLayer} pointerEvents="box-none">
-        <Pressable style={[styles.backButton, { backgroundColor: colors.control }]} onPress={() => navigation.goBack()}>
-          <Text style={[styles.backButtonText, { color: colors.controlText }]}>‹</Text>
+        <Pressable style={[styles.backButton, { backgroundColor: '#fff' }]} onPress={() => navigation.goBack()}>
+          {Platform.OS === 'android' ? <LineIcon name="chevronLeft" size={25} color={colors.controlText} /> : <Text style={[styles.backButtonText, { color: colors.controlText }]}>‹</Text>}
         </Pressable>
         <Text pointerEvents="none" style={[styles.navTitle, { color: colors.text }]}>{t('feedback.title')}</Text>
       </View>
@@ -365,8 +365,8 @@ const styles = StyleSheet.create({
   container: { flex: 1 },
   topLayer: { ...StyleSheet.absoluteFillObject, zIndex: 40, elevation: 40 },
   edgeBackGestureArea: { position: 'absolute', left: 0, top: 0, bottom: 0, width: 28, zIndex: 45, elevation: 45 },
-  backButton: { position: 'absolute', left: 20, top: 60, width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center', zIndex: 42, elevation: 42 },
-  backButtonText: { fontSize: 34, fontWeight: '500', lineHeight: 38, marginTop: -2 },
+  backButton: { position: 'absolute', left: 20, top: 60, width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center', zIndex: 42, elevation: 4 },
+  backButtonText: { fontSize: 34, fontWeight: '500', lineHeight: 38, marginTop: -2, ...Platform.select({ android: { lineHeight: 40, marginTop: 0, includeFontPadding: false, textAlignVertical: 'center' } }) },
   navTitle: { position: 'absolute', top: 69, left: 88, right: 88, fontSize: 17, fontWeight: '900', textAlign: 'center' },
   keyboardWrap: { position: 'absolute', left: 0, right: 0, top: 104, bottom: 0 },
   scroll: { flex: 1 },

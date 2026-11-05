@@ -1,0 +1,36 @@
+name: Bug report
+description: 报告客户端问题
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        请先搜索已有 Issue，并移除截图或日志中的手机号、邮箱、Token 等敏感信息。
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: 问题描述
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+    validations:
+      required: true
+  - type: input
+    id: device
+    attributes:
+      label: 设备与系统
+      placeholder: iPhone 15 Pro / iOS 18.1
+  - type: input
+    id: version
+    attributes:
+      label: App 版本 / 提交
+      placeholder: 1.0.0 (main @ abc1234)
+  - type: textarea
+    id: logs
+    attributes:
+      label: 相关日志
+      description: 请先脱敏。
+      render: shell

@@ -1,4 +1,4 @@
-import { analyzeHexagram, buildLunarInfo, createAiPrompt, generateHexagram } from '../utils/fortune';
+import { analyzeHexagram, buildLunarInfo, generateHexagram } from '../utils/fortune';
 import { AnalysisResult, FortuneRecord } from '../domain/types';
 
 export function createRecordId() {
@@ -32,8 +32,6 @@ export function createFortuneRecord(question: string, aiReading?: string): Fortu
     hexagram,
     lunarInfo,
     analysis,
-    aiReading:
-      aiReading ??
-      `AI 解读占位：\n${createAiPrompt(question, hexagram, analysis, lunarInfo)}\n\n建议后续接入大模型接口替换这里的文本。`,
+    aiReading: aiReading ?? 'AI 解读暂不可用，请检查网络后重试。',
   };
 }

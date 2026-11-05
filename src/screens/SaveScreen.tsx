@@ -3,7 +3,7 @@ import { FontAwesome } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useCallback } from 'react';
-import { Animated, Easing, Image, PanResponder, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Animated, Easing, Image, PanResponder, Platform, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { AppMoreMenu } from '../components/AppMoreMenu';
 import { LineIcon, LineIconName } from '../components/LineIcon';
 import { FortuneRecord } from '../domain/types';
@@ -35,6 +35,8 @@ const CARD_SHADOW = {
   shadowOffset: { width: 0, height: 8 },
   elevation: 5,
 };
+let saveScreenRecordsCache: FortuneRecord[] | undefined;
+let saveScreenStorageAvailableCache: boolean | undefined;
 
 function isSameDay(date: Date, target: Date) {
   return date.getFullYear() === target.getFullYear() && date.getMonth() === target.getMonth() && date.getDate() === target.getDate();
@@ -225,8 +227,9 @@ export function SaveScreen({ route, navigation }: Props) {
   const { darkMode, colors } = useAppTheme();
   const { t } = useAppLanguage();
   const edgeSwipeActive = useRef(false);
-  const [records, setRecords] = useState<FortuneRecord[]>([]);
-  const [storageAvailable, setStorageAvailable] = useState(true);
+  const [records, setRecords] = useState<FortuneRecord[]>(() => saveScreenRecordsCache ?? []);
+  const [storageAvailable, setStorageAvailable] = useState(() => saveScreenStorageAvailableCache ?? true);
+  const [contentReady, setContentReady] = useState(() => Boolean(saveScreenRecordsCache));
   const [keyword, setKeyword] = useState('');
   const [displayKeyword, setDisplayKeyword] = useState('');
   const [activeFilter, setActiveFilter] = useState<HistoryFilter>(route.params?.initialFilter ?? 'all');
@@ -258,8 +261,12 @@ export function SaveScreen({ route, navigation }: Props) {
 
   const refresh = async () => {
     const loaded = await listRecords();
+    const nextStorageAvailable = isPersistentStorageAvailable();
+    saveScreenRecordsCache = loaded;
+    saveScreenStorageAvailableCache = nextStorageAvailable;
     setRecords(loaded);
-    setStorageAvailable(isPersistentStorageAvailable());
+    setStorageAvailable(nextStorageAvailable);
+    setContentReady(true);
   };
 
   useEffect(() => {
@@ -358,14 +365,14 @@ export function SaveScreen({ route, navigation }: Props) {
     <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
       <View style={styles.edgeBackGestureArea} {...edgeBackPanResponder.panHandlers} />
       <View style={styles.topLayer} pointerEvents="box-none">
-        <Pressable style={[styles.backButton, { backgroundColor: colors.control }]} onPress={() => navigation.goBack()}>
-          <Text style={[styles.backButtonText, { color: colors.text }]}>‹</Text>
+        <Pressable style={[styles.backButton, { backgroundColor: '#fff' }]} onPress={() => navigation.goBack()}>
+          {Platform.OS === 'android' ? <LineIcon name="chevronLeft" size={25} color={colors.text} /> : <Text style={[styles.backButtonText, { color: colors.text }]}>‹</Text>}
         </Pressable>
         <Text pointerEvents="none" style={[styles.navTitle, { color: colors.text }]}>{t('history.title')}</Text>
-        <AppMoreMenu navigation={navigation} currentScreen="Save" />
+        <AppMoreMenu navigation={navigation} currentScreen="Save" buttonBackgroundColor="#fff" />
       </View>
 
-      <ScrollView style={styles.scroll} showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
+      {contentReady ? <ScrollView style={styles.scroll} showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
         {!storageAvailable ? <Text style={[styles.warning, { color: darkMode ? '#f2c46d' : '#8a5a00', backgroundColor: darkMode ? '#332813' : '#fff6dc' }]}>{t('history.storageWarning')}</Text> : null}
 
         <View style={[styles.statsCard, { backgroundColor: colors.card }]}>
@@ -405,7 +412,7 @@ export function SaveScreen({ route, navigation }: Props) {
           ))}
           {!filteredRecords.length ? <Text style={[styles.empty, { color: colors.faintText }]}>{records.length ? t('history.noMatch') : t('history.empty')}</Text> : null}
         </Animated.View>
-      </ScrollView>
+      </ScrollView> : null}
     </SafeAreaView>
   );
 }
@@ -425,9 +432,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     zIndex: 42,
-    elevation: 42,
+    elevation: 4,
   },
-  backButtonText: { color: '#111', fontSize: 34, fontWeight: '500', lineHeight: 38, marginTop: -2 },
+  backButtonText: { color: '#111', fontSize: 34, fontWeight: '500', lineHeight: 38, marginTop: -2, ...Platform.select({ android: { lineHeight: 40, marginTop: 0, includeFontPadding: false, textAlignVertical: 'center' } }) },
   navTitle: { position: 'absolute', top: 69, left: 88, right: 88, color: '#111', fontSize: 17, fontWeight: '900', textAlign: 'center' },
   scroll: { position: 'absolute', left: 0, right: 0, top: 104, bottom: 0 },
   content: { paddingTop: 8, paddingHorizontal: 18, paddingBottom: 34, gap: 14 },

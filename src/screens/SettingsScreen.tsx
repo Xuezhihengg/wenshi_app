@@ -1,5 +1,5 @@
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
-import { Pressable, SafeAreaView, StyleSheet, Text, View } from 'react-native';
+import { Platform, Pressable, SafeAreaView, StyleSheet, Text, View } from 'react-native';
 import { AppMoreMenu } from '../components/AppMoreMenu';
 import { LineIcon, LineIconName } from '../components/LineIcon';
 import { RootStackParamList } from '../navigation/types';
@@ -20,7 +20,7 @@ export function SettingsScreen({ navigation }: Props) {
     <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
       <View style={styles.topLayer} pointerEvents="box-none">
         <Pressable style={[styles.backButton, { backgroundColor: colors.control }]} onPress={() => navigation.goBack()}>
-          <Text style={[styles.backButtonText, { color: colors.text }]}>‹</Text>
+          {Platform.OS === 'android' ? <LineIcon name="chevronLeft" size={25} color={colors.text} /> : <Text style={[styles.backButtonText, { color: colors.text }]}>‹</Text>}
         </Pressable>
         <AppMoreMenu navigation={navigation} currentScreen="Settings" />
       </View>
@@ -69,9 +69,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     zIndex: 42,
-    elevation: 42,
+    elevation: 4,
   },
-  backButtonText: { color: '#111', fontSize: 34, fontWeight: '500', lineHeight: 38, marginTop: -2 },
+  backButtonText: { color: '#111', fontSize: 34, fontWeight: '500', lineHeight: 38, marginTop: -2, ...Platform.select({ android: { lineHeight: 40, marginTop: 0, includeFontPadding: false, textAlignVertical: 'center' } }) },
   content: { flex: 1, paddingTop: 118, paddingHorizontal: 18, gap: 16 },
   title: { color: '#000', fontSize: 28, fontWeight: '900' },
   card: { ...CARD_SHADOW, borderRadius: 20, backgroundColor: '#fff', overflow: 'hidden' },

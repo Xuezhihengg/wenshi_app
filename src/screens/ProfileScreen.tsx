@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { CommonActions, useFocusEffect } from '@react-navigation/native';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { LinearGradient } from 'expo-linear-gradient';
-import { Alert, Animated, AppState, Easing, Image, Linking, Modal, PanResponder, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, Animated, AppState, Easing, Image, Linking, Modal, PanResponder, Platform, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { clearStoredLogin, disableGuestMode, isGuestMode } from '../api/client';
 import { alertGuestRequiresLogin } from '../utils/guestPrompt';
 import { AppMoreMenu } from '../components/AppMoreMenu';
@@ -19,6 +19,12 @@ import { AppLanguage, TranslationKey, useAppLanguage } from '../i18n/AppLanguage
 type Props = NativeStackScreenProps<RootStackParamList, 'Profile'>;
 type LayoutBox = { x: number; y: number; width: number; height: number };
 type ProfileStats = { castCount: number; fulfilledCount: number };
+type ProfileScreenCache = {
+  profiles: DivinationProfile[];
+  userProfile?: UserProfile;
+  profileStats: ProfileStats;
+  guestMode: boolean;
+};
 
 type NotificationPermissionResponse = {
   granted?: boolean;
@@ -63,6 +69,7 @@ const QUIET_TIME_OPTIONS = Array.from({ length: 24 }, (_, index) => `${index.toS
 const TIME_WHEEL_ITEM_HEIGHT = 36;
 const TIME_WHEEL_VISIBLE_ITEMS = 5;
 const TIME_WHEEL_SIDE_PADDING = TIME_WHEEL_ITEM_HEIGHT * 2;
+let profileScreenCache: ProfileScreenCache | undefined;
 
 function timeToHour(time: string) {
   return Number.parseInt(time.slice(0, 2), 10);
@@ -399,10 +406,11 @@ function TimeWheelPicker({
 export function ProfileScreen({ navigation }: Props) {
   const { darkMode, setDarkMode, colors } = useAppTheme();
   const { language, setLanguage, t } = useAppLanguage();
-  const [profiles, setProfiles] = useState<DivinationProfile[]>([]);
-  const [userProfile, setUserProfile] = useState<UserProfile>();
-  const [profileStats, setProfileStats] = useState<ProfileStats>({ castCount: 0, fulfilledCount: 0 });
-  const [guestMode, setGuestMode] = useState(false);
+  const [profiles, setProfiles] = useState<DivinationProfile[]>(() => profileScreenCache?.profiles ?? []);
+  const [userProfile, setUserProfile] = useState<UserProfile | undefined>(() => profileScreenCache?.userProfile);
+  const [profileStats, setProfileStats] = useState<ProfileStats>(() => profileScreenCache?.profileStats ?? { castCount: 0, fulfilledCount: 0 });
+  const [guestMode, setGuestMode] = useState(() => profileScreenCache?.guestMode ?? false);
+  const [contentReady, setContentReady] = useState(() => Boolean(profileScreenCache));
   const [notificationModalVisible, setNotificationModalVisible] = useState(false);
   const [languageModalVisible, setLanguageModalVisible] = useState(false);
   const [notificationSettings, setNotificationSettings] = useState<NotificationSettings>(DEFAULT_NOTIFICATION_SETTINGS);
@@ -439,13 +447,21 @@ export function ProfileScreen({ navigation }: Props) {
     const [nextProfiles, records, nextGuestMode] = await Promise.all([listProfiles(), listRecords(), isGuestMode()]);
     const selfProfile = nextProfiles.find((profile) => profile.id === 'self' || profile.relation === '本人');
     const nextUserProfile = selfProfile ? await syncUserProfileFromSelfArchive(selfProfile) : await getUserProfile();
+    const nextStats = {
+      castCount: records.length,
+      fulfilledCount: records.filter((record) => latestRecordFulfilled(record)).length,
+    };
+    profileScreenCache = {
+      profiles: nextProfiles,
+      userProfile: nextUserProfile,
+      profileStats: nextStats,
+      guestMode: nextGuestMode,
+    };
     setProfiles(nextProfiles);
     setUserProfile(nextUserProfile);
     setGuestMode(nextGuestMode);
-    setProfileStats({
-      castCount: records.length,
-      fulfilledCount: records.filter((record) => latestRecordFulfilled(record)).length,
-    });
+    setProfileStats(nextStats);
+    setContentReady(true);
   };
 
   const refreshNotificationState = async () => {
@@ -601,14 +617,14 @@ export function ProfileScreen({ navigation }: Props) {
     <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
       <View style={styles.edgeBackGestureArea} {...edgeBackPanResponder.panHandlers} />
       <View style={styles.topLayer} pointerEvents="box-none">
-        <Pressable style={[styles.backButton, { backgroundColor: colors.control }]} onPress={() => navigation.goBack()}>
-          <Text style={[styles.backButtonText, { color: colors.controlText }]}>‹</Text>
+        <Pressable style={[styles.backButton, { backgroundColor: '#fff' }]} onPress={() => navigation.goBack()}>
+          {Platform.OS === 'android' ? <LineIcon name="chevronLeft" size={25} color={colors.controlText} /> : <Text style={[styles.backButtonText, { color: colors.controlText }]}>‹</Text>}
         </Pressable>
         <Text pointerEvents="none" style={[styles.navTitle, { color: colors.text }]}>{t('profile.title')}</Text>
-        <AppMoreMenu navigation={navigation} currentScreen="Profile" />
+        <AppMoreMenu navigation={navigation} currentScreen="Profile" buttonBackgroundColor="#fff" />
       </View>
 
-      <ScrollView
+      {contentReady ? <ScrollView
         style={styles.scroll}
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.content}
@@ -705,7 +721,7 @@ export function ProfileScreen({ navigation }: Props) {
         <Pressable style={[styles.logoutCard, { backgroundColor: colors.card }]} onPress={handleLogout}>
           <Text style={styles.logoutText}>{t('profile.logout')}</Text>
         </Pressable>
-      </ScrollView>
+      </ScrollView> : null}
       <Modal transparent visible={notificationModalVisible} animationType="fade" onRequestClose={closeNotificationModal}>
         <View style={[styles.notificationBackdrop, { backgroundColor: colors.overlay }]}>
           <Pressable style={StyleSheet.absoluteFill} onPress={closeNotificationModal} />
@@ -903,7 +919,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     zIndex: 42,
-    elevation: 42,
+    elevation: 4,
   },
   backButtonText: {
     color: '#111',
@@ -911,6 +927,7 @@ const styles = StyleSheet.create({
     fontWeight: '500',
     lineHeight: 38,
     marginTop: -2,
+    ...Platform.select({ android: { lineHeight: 40, marginTop: 0, includeFontPadding: false, textAlignVertical: 'center' } }),
   },
   navTitle: {
     position: 'absolute',

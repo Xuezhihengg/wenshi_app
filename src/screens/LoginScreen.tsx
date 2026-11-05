@@ -3,7 +3,8 @@ import { useEffect, useRef, useState } from 'react';
 import { Animated, Easing, Alert, Keyboard, Platform, Pressable, SafeAreaView, StyleSheet, Text, TextInput, TouchableWithoutFeedback, View } from 'react-native';
 import { FontAwesome } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import { AuthChannel, enableGuestMode, LoginResult, loginWithCode, sendLoginCode } from '../api/client';
+import { GoogleSignin, statusCodes } from '@react-native-google-signin/google-signin';
+import { AuthChannel, enableGuestMode, LoginResult, loginWithCode, loginWithGoogle, sendLoginCode } from '../api/client';
 import { LineIcon, LineIconName } from '../components/LineIcon';
 import { RootStackParamList } from '../navigation/types';
 import { setCurrentAccount } from '../storage/userProfileStore';
@@ -24,6 +25,17 @@ const PROVIDERS: ProviderAction[] = [
   { key: 'google', icon: 'google', brand: true },
   { key: 'guest', icon: 'user' },
 ];
+
+const GOOGLE_WEB_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID ?? '';
+const GOOGLE_IOS_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID ?? '';
+const GOOGLE_SIGNIN_CONFIGURED = Boolean(GOOGLE_WEB_CLIENT_ID);
+
+if (GOOGLE_SIGNIN_CONFIGURED) {
+  GoogleSignin.configure({
+    webClientId: GOOGLE_WEB_CLIENT_ID,
+    iosClientId: GOOGLE_IOS_CLIENT_ID || undefined,
+  });
+}
 
 export function LoginScreen({ navigation }: Props) {
   const { darkMode, colors } = useAppTheme();
@@ -241,10 +253,40 @@ export function LoginScreen({ navigation }: Props) {
     );
   };
 
-  const handleProviderPress = (key: string) => {
+  const continueWithGoogle = async () => {
+    if (submitting) return;
+    Keyboard.dismiss();
+    setSubmitting(true);
+    setErrorText('');
+    try {
+      await GoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog: true });
+      const response = await GoogleSignin.signIn();
+      const idToken = response.data?.idToken;
+      if (!idToken) throw new Error('Google identity token is missing.');
+      const result = await loginWithGoogle({ identityToken: idToken });
+      await setCurrentAccount(response.data?.user.email || 'google');
+      routeAfterLogin(result);
+    } catch (error) {
+      const code = typeof error === 'object' && error !== null && 'code' in error ? String((error as { code?: unknown }).code) : '';
+      if (code === statusCodes.SIGN_IN_CANCELLED) return;
+      setErrorText(t('login.genericFailed'));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleProviderPress = async (key: string) => {
     setErrorText('');
     if (key === 'guest') {
       continueAsGuest();
+      return;
+    }
+    if (key === 'google') {
+      if (!GOOGLE_SIGNIN_CONFIGURED) {
+        showProviderUnavailable(key);
+        return;
+      }
+      await continueWithGoogle();
       return;
     }
     showProviderUnavailable(key);
@@ -455,7 +497,7 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 12 },
     elevation: 8,
   },
-  logoText: { fontSize: 48, fontWeight: '900' },
+  logoText: { fontSize: 62, fontFamily: 'Songti SC', fontWeight: '900', includeFontPadding: false },
   title: { fontSize: 24, fontWeight: '200', letterSpacing: 1 },
   bottomArea: { paddingBottom: 22 },
   card: { borderRadius: 28, padding: 18, gap: 16, shadowColor: '#000', shadowOpacity: 0.12, shadowRadius: 26, shadowOffset: { width: 0, height: 14 }, elevation: 8 },

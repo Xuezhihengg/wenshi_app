@@ -35,6 +35,9 @@ export type LineIconName =
   | 'star'
   | 'plus'
   | 'trash'
+  | 'x'
+  | 'chevronLeft'
+  | 'moreHorizontal'
   | 'chevronDown';
 
 type Props = {
@@ -78,6 +81,9 @@ const FEATHER_ICON_MAP: Record<LineIconName, keyof typeof Feather.glyphMap> = {
   star: 'star',
   plus: 'plus',
   trash: 'trash-2',
+  x: 'x',
+  chevronLeft: 'chevron-left',
+  moreHorizontal: 'more-horizontal',
   chevronDown: 'chevron-down',
 };
 

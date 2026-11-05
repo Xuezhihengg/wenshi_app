@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { Animated, Easing, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Animated, Easing, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { LineIcon, LineIconName } from './LineIcon';
 import { useAppTheme } from '../theme/AppTheme';
 import { TranslationKey, useAppLanguage } from '../i18n/AppLanguage';
@@ -11,6 +11,7 @@ type Props = {
     popToTop?: () => void;
   };
   currentScreen?: 'Question' | 'Profile' | 'Save' | 'Settings';
+  buttonBackgroundColor?: string;
 };
 
 const MENU_ITEMS: Array<{
@@ -25,7 +26,7 @@ const MENU_ITEMS: Array<{
   { screen: 'Settings', destination: 'Profile', icon: 'settings', labelKey: 'common.settings' },
 ];
 
-export function AppMoreMenu({ navigation, currentScreen }: Props) {
+export function AppMoreMenu({ navigation, currentScreen, buttonBackgroundColor }: Props) {
   const { darkMode, colors } = useAppTheme();
   const { t } = useAppLanguage();
   const [visible, setVisible] = useState(false);
@@ -106,34 +107,65 @@ export function AppMoreMenu({ navigation, currentScreen }: Props) {
         <Pressable style={StyleSheet.absoluteFill} onPress={close} />
       </Animated.View>
       <View pointerEvents="box-none" style={styles.layer}>
-        <Pressable style={[styles.button, visible ? styles.buttonActive : null, { backgroundColor: visible ? (darkMode ? colors.card : colors.inverse) : colors.control }]} onPress={toggle}>
-          <Animated.View
-            pointerEvents="none"
-            style={[
-              styles.dots,
-              {
-                opacity: progress.interpolate({ inputRange: [0, 0.45, 1], outputRange: [1, 0, 0] }),
-                transform: [{ scale: progress.interpolate({ inputRange: [0, 1], outputRange: [1, 0.72] }) }],
-              },
-            ]}
-          >
-            <View style={[styles.dot, { backgroundColor: visible && !darkMode ? colors.inverseText : colors.text }]} />
-            <View style={[styles.dot, { backgroundColor: visible && !darkMode ? colors.inverseText : colors.text }]} />
-            <View style={[styles.dot, { backgroundColor: visible && !darkMode ? colors.inverseText : colors.text }]} />
-          </Animated.View>
-          <Animated.Text
-            pointerEvents="none"
-            style={[
-              styles.closeText,
-              {
-                color: darkMode ? colors.text : colors.inverseText,
-                opacity: progress.interpolate({ inputRange: [0, 0.45, 1], outputRange: [0, 0, 1] }),
-                transform: [{ scale: progress.interpolate({ inputRange: [0, 1], outputRange: [0.72, 1] }) }],
-              },
-            ]}
-          >
-            ×
-          </Animated.Text>
+        <Pressable style={[styles.button, visible ? styles.buttonActive : null, { backgroundColor: visible ? (darkMode ? colors.card : colors.inverse) : (buttonBackgroundColor ?? colors.control) }]} onPress={toggle}>
+          {Platform.OS === 'android' ? (
+            <>
+              <Animated.View
+                pointerEvents="none"
+                style={[
+                  styles.androidIconLayer,
+                  {
+                    opacity: progress.interpolate({ inputRange: [0, 0.45, 1], outputRange: [1, 0, 0] }),
+                    transform: [{ scale: progress.interpolate({ inputRange: [0, 1], outputRange: [1, 0.72] }) }],
+                  },
+                ]}
+              >
+                <LineIcon name="moreHorizontal" size={23} color={visible && !darkMode ? colors.inverseText : colors.text} />
+              </Animated.View>
+              <Animated.View
+                pointerEvents="none"
+                style={[
+                  styles.androidIconLayer,
+                  {
+                    opacity: progress.interpolate({ inputRange: [0, 0.45, 1], outputRange: [0, 0, 1] }),
+                    transform: [{ scale: progress.interpolate({ inputRange: [0, 1], outputRange: [0.72, 1] }) }],
+                  },
+                ]}
+              >
+                <LineIcon name="x" size={23} color={darkMode ? colors.text : colors.inverseText} />
+              </Animated.View>
+            </>
+          ) : (
+            <>
+              <Animated.View
+                pointerEvents="none"
+                style={[
+                  styles.dots,
+                  {
+                    opacity: progress.interpolate({ inputRange: [0, 0.45, 1], outputRange: [1, 0, 0] }),
+                    transform: [{ scale: progress.interpolate({ inputRange: [0, 1], outputRange: [1, 0.72] }) }],
+                  },
+                ]}
+              >
+                <View style={[styles.dot, { backgroundColor: visible && !darkMode ? colors.inverseText : colors.text }]} />
+                <View style={[styles.dot, { backgroundColor: visible && !darkMode ? colors.inverseText : colors.text }]} />
+                <View style={[styles.dot, { backgroundColor: visible && !darkMode ? colors.inverseText : colors.text }]} />
+              </Animated.View>
+              <Animated.Text
+                pointerEvents="none"
+                style={[
+                  styles.closeText,
+                  {
+                    color: darkMode ? colors.text : colors.inverseText,
+                    opacity: progress.interpolate({ inputRange: [0, 0.45, 1], outputRange: [0, 0, 1] }),
+                    transform: [{ scale: progress.interpolate({ inputRange: [0, 1], outputRange: [0.72, 1] }) }],
+                  },
+                ]}
+              >
+                ×
+              </Animated.Text>
+            </>
+          )}
         </Pressable>
         {mounted ? (
           <Animated.View
@@ -195,10 +227,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     overflow: 'hidden',
+    zIndex: 42,
+    elevation: 4,
   },
   buttonActive: { backgroundColor: '#000' },
-  dots: { position: 'absolute', width: 40, height: 40, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 3 },
+  dots: { position: 'absolute', width: 40, height: 40, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 3, ...Platform.select({ android: { transform: [{ translateY: -0.5 }] } }) },
   dot: { width: 4, height: 4, borderRadius: 2, backgroundColor: '#111' },
+  androidIconLayer: { position: 'absolute', width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
   closeText: {
     position: 'absolute',
     top: -1,
@@ -210,6 +245,7 @@ const styles = StyleSheet.create({
     lineHeight: 40,
     textAlign: 'center',
     includeFontPadding: false,
+    ...Platform.select({ android: { top: 0, textAlignVertical: 'center' } }),
   },
   card: {
     position: 'absolute',

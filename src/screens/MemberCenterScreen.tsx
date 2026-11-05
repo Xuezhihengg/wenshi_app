@@ -1,7 +1,7 @@
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRef } from 'react';
-import { Alert, Animated, PanResponder, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import { Alert, Animated, PanResponder, Platform, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { LineIcon, LineIconName } from '../components/LineIcon';
 import { useAppLanguage } from '../i18n/AppLanguage';
 import { RootStackParamList } from '../navigation/types';
@@ -28,11 +28,11 @@ type Plan = {
   icon: LineIconName;
   titleKey: 'member.planFree' | 'member.planMonthly' | 'member.planYearly';
   priceKey: 'member.priceFree' | 'member.priceMonthly' | 'member.priceYearly';
-  perks: Array<'member.freeOne' | 'member.freeTwo' | 'member.freeThree' | 'member.monthlyOne' | 'member.monthlyTwo' | 'member.monthlyThree' | 'member.yearlyOne' | 'member.yearlyTwo' | 'member.yearlyThree'>;
+  perks: Array<'member.freeOne' | 'member.freeTwo' | 'member.freeThree' | 'member.freeFour' | 'member.monthlyOne' | 'member.monthlyTwo' | 'member.monthlyThree' | 'member.yearlyOne' | 'member.yearlyTwo' | 'member.yearlyThree'>;
 };
 
 const PLANS: Plan[] = [
-  { key: 'free', icon: 'check', titleKey: 'member.planFree', priceKey: 'member.priceFree', perks: ['member.freeOne', 'member.freeTwo', 'member.freeThree'] },
+  { key: 'free', icon: 'check', titleKey: 'member.planFree', priceKey: 'member.priceFree', perks: ['member.freeOne', 'member.freeTwo', 'member.freeThree', 'member.freeFour'] },
   { key: 'monthly', icon: 'star', titleKey: 'member.planMonthly', priceKey: 'member.priceMonthly', perks: ['member.monthlyOne', 'member.monthlyTwo', 'member.monthlyThree'] },
   { key: 'yearly', icon: 'crown', titleKey: 'member.planYearly', priceKey: 'member.priceYearly', perks: ['member.yearlyOne', 'member.yearlyTwo', 'member.yearlyThree'] },
 ];
@@ -45,7 +45,7 @@ const MANAGE_ITEMS: Array<{ icon: LineIconName; titleKey: 'member.agreement' | '
 
 function PlanCard({ plan, index, onOpen }: { plan: Plan; index: number; onOpen: () => void }) {
   const { darkMode, colors } = useAppTheme();
-  const { t } = useAppLanguage();
+  const { language, t } = useAppLanguage();
   const current = plan.key === 'free';
   const recommended = plan.key === 'monthly';
   const iconTint = ['#2563eb', '#0f9f6e', '#d97706'][index];
@@ -75,7 +75,7 @@ function PlanCard({ plan, index, onOpen }: { plan: Plan; index: number; onOpen: 
           <Text style={[styles.planPrice, { color: darkMode ? colors.text : '#111' }]}>{t(plan.priceKey)}</Text>
         </View>
       </View>
-      <View style={styles.perkList}>
+      <View style={[styles.perkList, language === 'en' ? styles.perkListEn : null]}>
         {plan.perks.map((perk) => (
           <View key={perk} style={styles.perkRow}>
             <View style={[styles.perkDot, { backgroundColor: recommended ? '#d59a16' : colors.text }]} />
@@ -83,9 +83,11 @@ function PlanCard({ plan, index, onOpen }: { plan: Plan; index: number; onOpen: 
           </View>
         ))}
       </View>
-      <Pressable style={[styles.openButton, { backgroundColor: buttonColor }]} onPress={onOpen}>
-        <Text style={[styles.openButtonText, { color: buttonTextColor }]}>{t('member.openNow')}</Text>
-      </Pressable>
+      {current ? null : (
+        <Pressable style={[styles.openButton, { backgroundColor: buttonColor }]} onPress={onOpen}>
+          <Text style={[styles.openButtonText, { color: buttonTextColor }]}>{t('member.openNow')}</Text>
+        </Pressable>
+      )}
     </View>
   );
 }
@@ -138,8 +140,8 @@ export function MemberCenterScreen({ navigation }: Props) {
     <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
       <View style={styles.edgeBackGestureArea} {...edgeBackPanResponder.panHandlers} />
       <View style={styles.topLayer} pointerEvents="box-none">
-        <Pressable style={[styles.backButton, { backgroundColor: colors.control }]} onPress={() => navigation.goBack()}>
-          <Text style={[styles.backButtonText, { color: colors.controlText }]}>‹</Text>
+        <Pressable style={[styles.backButton, { backgroundColor: '#fff' }]} onPress={() => navigation.goBack()}>
+          {Platform.OS === 'android' ? <LineIcon name="chevronLeft" size={25} color={colors.controlText} /> : <Text style={[styles.backButtonText, { color: colors.controlText }]}>‹</Text>}
         </Pressable>
         <Text pointerEvents="none" style={[styles.navTitle, { color: colors.text }]}>{t('member.title')}</Text>
       </View>
@@ -210,9 +212,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     zIndex: 42,
-    elevation: 42,
+    elevation: 4,
   },
-  backButtonText: { color: '#111', fontSize: 34, fontWeight: '500', lineHeight: 38, marginTop: -2 },
+  backButtonText: { color: '#111', fontSize: 34, fontWeight: '500', lineHeight: 38, marginTop: -2, ...Platform.select({ android: { lineHeight: 40, marginTop: 0, includeFontPadding: false, textAlignVertical: 'center' } }) },
   navTitle: { position: 'absolute', top: 69, left: 88, right: 88, color: '#111', fontSize: 17, fontWeight: '900', textAlign: 'center' },
   scroll: { position: 'absolute', left: 0, right: 0, top: 104, bottom: 0 },
   content: { paddingTop: 8, paddingBottom: 40, gap: 8, backgroundColor: 'transparent' },
@@ -246,7 +248,8 @@ const styles = StyleSheet.create({
   planPrice: { color: '#111', fontSize: 32, fontWeight: '900', textAlign: 'center' },
   planBadge: { position: 'absolute', right: 16, top: 16, height: 25, borderRadius: 13, backgroundColor: '#111', paddingHorizontal: 10, alignItems: 'center', justifyContent: 'center' },
   planBadgeText: { color: '#fff', fontSize: 11, fontWeight: '900' },
-  perkList: { width: '60%', marginLeft: 30, gap: 14, alignItems: 'stretch', alignSelf: 'center'}, 
+  perkList: { width: '70%', marginLeft: 40, gap: 14, alignItems: 'stretch', alignSelf: 'center' },
+  perkListEn: { width: '86%', marginLeft: 0 },
   perkRow: { width: '100%', flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-start', gap: 8 },
   perkDot: { width: 6, height: 7, borderRadius: 3, backgroundColor: '#111' },
   perkText: { flex: 1, color: '#555', fontSize: 13, fontWeight: '800', lineHeight: 20, textAlign: 'left' },

@@ -8,13 +8,14 @@ import { Animated, Easing, Keyboard, LayoutAnimation, Modal, PanResponder, Press
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LineIcon } from '../components/LineIcon';
 import { generateRemoteAIReading } from '../api/records';
-import { isGuestMode } from '../api/client';
+import { ApiRequestError, isGuestMode } from '../api/client';
 import { hexagramTextFor, type HexagramTextSection } from '../domain/hexagramTexts';
 import { AIReading, HexagramLine, SpiritAnalysis, UnionAnalysis, UnionLineRef, UnionPattern, YinYang } from '../domain/types';
 import { RootStackParamList } from '../navigation/types';
 import { saveRecord } from '../storage/recordStore';
 import { useAppTheme } from '../theme/AppTheme';
 import { TranslationKey, useAppLanguage } from '../i18n/AppLanguage';
+import { getEffectivePlanLimits, getLocalAIUsageCount, incrementLocalAIUsage } from '../services/membershipLimits';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Analysis'>;
 type MetaMode = 'sixKin' | 'sixSpirit';
@@ -1436,6 +1437,7 @@ function AIReadingBlock({
   recordCreatedAt,
   notes,
   onGenerate,
+  onUpgrade,
   monthStemBranch,
   dayStemBranch,
   guestMode,
@@ -1447,12 +1449,14 @@ function AIReadingBlock({
   recordCreatedAt: string;
   notes: VerificationNote[];
   onGenerate: () => void;
+  onUpgrade: () => void;
   monthStemBranch: string;
   dayStemBranch: string;
   guestMode?: boolean;
 }) {
   const { colors, darkMode } = useAppTheme();
   const { language, t } = useAppLanguage();
+  const quotaReached = error === t('analysis.aiQuotaReached');
   if (guestMode) {
     return (
       <View style={[styles.aiReadingWrap, styles.aiReadingWrapFill]}>
@@ -1478,17 +1482,19 @@ function AIReadingBlock({
       <View style={styles.aiReadingWrap}>
         <View style={[styles.aiEmptyCard, { backgroundColor: darkMode ? '#172333' : '#e6f0f8' }]}>
           <Text style={[styles.aiEmptyTitle, { color: colors.text }]}>{t('analysis.aiEmptyTitle')}</Text>
-          <Text style={[styles.aiEmptyBody, { color: colors.mutedText }]}>
-            {saved ? t('analysis.aiEmptyBody') : t('analysis.aiUnsavedBody')}
-          </Text>
+          {!quotaReached ? (
+            <Text style={[styles.aiEmptyBody, { color: colors.mutedText }]}>
+              {saved ? t('analysis.aiEmptyBody') : t('analysis.aiUnsavedBody')}
+            </Text>
+          ) : null}
           {error ? <Text style={styles.aiErrorText}>{error}</Text> : null}
           <Pressable
-            disabled={!saved || loading}
-            style={[styles.aiGenerateButton, { backgroundColor: saved && !loading ? colors.inverse : colors.divider }]}
-            onPress={onGenerate}
+            disabled={!quotaReached && (!saved || loading)}
+            style={[styles.aiGenerateButton, { backgroundColor: (quotaReached || (saved && !loading)) ? colors.inverse : colors.divider }]}
+            onPress={quotaReached ? onUpgrade : onGenerate}
           >
-            <Text style={[styles.aiGenerateButtonText, { color: saved && !loading ? colors.inverseText : colors.faintText }]}>
-              {loading ? t('analysis.aiGenerating') : t('analysis.aiGenerate')}
+            <Text style={[styles.aiGenerateButtonText, { color: (quotaReached || (saved && !loading)) ? colors.inverseText : colors.faintText }]}>
+              {quotaReached ? t('analysis.upgradeMembership') : loading ? t('analysis.aiGenerating') : t('analysis.aiGenerate')}
             </Text>
           </Pressable>
         </View>
@@ -2730,11 +2736,20 @@ export function AnalysisScreen({ navigation, route }: Props) {
 
   const generateAIReading = async () => {
     if (!savedRecordRef.current || aiReadingLoading) return;
+    const { limits } = await getEffectivePlanLimits();
+    if (limits.aiDailyLimit !== undefined) {
+      const used = await getLocalAIUsageCount();
+      if (used >= limits.aiDailyLimit) {
+        setAiReadingError(t('analysis.aiQuotaReached'));
+        return;
+      }
+    }
     setAiReadingLoading(true);
     setAiReadingError(undefined);
     try {
       const reading = await generateRemoteAIReading(record.id, language);
       setAiReading(reading);
+      await incrementLocalAIUsage();
       await saveRecord({
         ...record,
         analysis: { ...record.analysis, aiReadingStructured: reading },
@@ -2743,10 +2758,19 @@ export function AnalysisScreen({ navigation, route }: Props) {
       });
       markRecordSaved();
     } catch (error) {
-      setAiReadingError(error instanceof Error ? error.message : t('analysis.aiFailed'));
+      const message = error instanceof ApiRequestError && error.detail?.code === 'ai_quota_exceeded'
+        ? t('analysis.aiQuotaReached')
+        : error instanceof Error
+          ? error.message
+          : t('analysis.aiFailed');
+      setAiReadingError(message);
     } finally {
       setAiReadingLoading(false);
     }
+  };
+
+  const openMemberCenter = () => {
+    navigation.navigate('MemberCenter');
   };
 
   const autoReadingTriggeredRef = useRef(false);
@@ -3369,17 +3393,17 @@ export function AnalysisScreen({ navigation, route }: Props) {
               <View style={styles.hexMarkLayoutRow}>
                 <View style={styles.hexHeaderSide} />
                 <View style={styles.hexGroup}>
-                  <View style={styles.hexColumn}>
+                  <View style={styles.hexMarkColumn}>
                     <HexagramMarkTags marks={record.hexagram.marks} />
                   </View>
-                  <View style={styles.metaColumn} />
+                  <View style={styles.hexMarkMetaSpacer} />
                 </View>
                 {hasChangedHexagram ? (
                   <View style={styles.hexGroup}>
-                    <View style={styles.hexColumn}>
+                    <View style={styles.hexMarkColumn}>
                       <HexagramMarkTags marks={record.hexagram.changedMarks} />
                     </View>
-                    <View style={styles.metaColumn} />
+                    <View style={styles.hexMarkMetaSpacer} />
                   </View>
                 ) : null}
               </View>
@@ -3572,6 +3596,7 @@ export function AnalysisScreen({ navigation, route }: Props) {
                 recordCreatedAt={record.createdAt}
                 notes={verificationNotes}
                 onGenerate={generateAIReading}
+                onUpgrade={openMemberCenter}
                 monthStemBranch={record.lunarInfo.monthStemBranch}
                 dayStemBranch={record.lunarInfo.dayStemBranch}
                 guestMode={guestMode}
@@ -4020,7 +4045,7 @@ const styles = StyleSheet.create({
   hexagramStage: {
     backgroundColor: '#fff',
     paddingTop: 4,
-    gap: 12,
+    gap: 8,
   },
   hexHeaderRow: { flexDirection: 'row', alignItems: 'center', columnGap: 12 },
   hexHeaderSide: { width: 20 },
@@ -4095,9 +4120,11 @@ const styles = StyleSheet.create({
   fullTextBody: { color: '#111', fontSize: 15, lineHeight: 24, fontWeight: '600' },
   fullTextTranslation: { color: '#555', fontSize: 13, lineHeight: 21, fontWeight: '600' },
   hexagramCore: { gap: 0 },
-  hexMarkLayoutRow: { flexDirection: 'row', alignItems: 'center', columnGap: 12, paddingHorizontal: 2, marginTop: -14 , marginBottom: -8},
-  hexMarkRow: { minHeight: 18, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
-  hexMarkText: { color: '#000', fontSize: 11, fontWeight: '900', lineHeight: 14, includeFontPadding: false },
+  hexMarkLayoutRow: { flexDirection: 'row', alignItems: 'center', columnGap: 12, paddingHorizontal: 2, marginTop: -4, marginBottom: -2 },
+  hexMarkColumn: { flex: 1, height: 12, justifyContent: 'center', overflow: 'visible' },
+  hexMarkMetaSpacer: { width: META_COLUMN_WIDTH, height: 12 },
+  hexMarkRow: { minHeight: 10, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4 },
+  hexMarkText: { color: '#000', fontSize: 11, fontWeight: '900', lineHeight: 12, includeFontPadding: false },
   hexLineRow: { flexDirection: 'row', alignItems: 'center', columnGap: 8, height: 32, paddingLeft: 4, paddingRight: 2, overflow: 'visible', zIndex: 1, elevation: 0 },
   hexLineRowActive: { zIndex: 100, elevation: 100 },
   changedHighlightBackground: { ...StyleSheet.absoluteFillObject, zIndex: 0 },

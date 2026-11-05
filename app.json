@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "wenshi-app",
-    "slug": "wenshi-app",
+    "name": "问事",
+    "slug": "wenshi",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -18,21 +18,25 @@
       "infoPlist": {
         "NSCameraUsageDescription": "问事需要访问相机，用于拍摄并设置个人头像。",
         "NSPhotoLibraryUsageDescription": "问事需要访问相册，用于选择并设置个人头像。",
-        "NSPhotoLibraryAddUsageDescription": "问事需要保存图片到相册。"
+        "NSPhotoLibraryAddUsageDescription": "问事需要保存图片到相册。",
+        "NSAppTransportSecurity": {
+          "NSAllowsArbitraryLoads": false,
+          "NSAllowsLocalNetworking": true
+        }
       }
     },
     "android": {
       "package": "com.xuezhihengg.wenshi",
       "versionCode": 1,
       "adaptiveIcon": {
-        "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#ffffff"
+        "foregroundImage": "./assets/wenshi_icon.png",
+        "backgroundColor": "#f5f3ec"
       },
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false
     },
     "web": {
-      "favicon": "./assets/favicon.png"
+      "favicon": "./assets/icon.png"
     },
     "plugins": [
       "expo-sqlite",
@@ -44,10 +48,9 @@
         }
       ],
       [
-        "./plugins/withCustomMetroPort",
+        "@react-native-google-signin/google-signin",
         {
-          "port": 8083,
-          "host": "172.20.10.12"
+          "iosUrlScheme": "com.googleusercontent.apps.replace-me"
         }
       ]
     ]

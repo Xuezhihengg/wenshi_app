@@ -2,13 +2,15 @@ import { useFocusEffect } from '@react-navigation/native';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import * as ImagePicker from 'expo-image-picker';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Alert, Animated, Easing, Image, Keyboard, Modal, PanResponder, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Alert, Animated, Easing, Image, Keyboard, Modal, PanResponder, Platform, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { AppMoreMenu } from '../components/AppMoreMenu';
 import { LineIcon } from '../components/LineIcon';
 import { DivinationProfile } from '../domain/types';
 import { RootStackParamList } from '../navigation/types';
 import { uploadPickedAvatar } from '../services/avatarUpload';
 import { createProfile, deleteProfile, listProfiles, profileInitial, PROFILE_RELATION_TAGS, setSelectedProfileId, updateProfile } from '../storage/profileStore';
+import { ApiRequestError } from '../api/client';
+import { getEffectivePlanLimits } from '../services/membershipLimits';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useAppTheme } from '../theme/AppTheme';
 import { TranslationKey, useAppLanguage } from '../i18n/AppLanguage';
@@ -372,7 +374,7 @@ function ArchiveCard({
   } : { marginBottom: trailingSpace };
 
   return (
-    <Animated.View style={[styles.archiveCardShell, deleteStyle]}>
+    <Animated.View style={[styles.archiveCardShell, { backgroundColor: colors.card }, deleteStyle]}>
     <Animated.View
       style={[styles.archiveCard, { backgroundColor: colors.card }]}
       onLayout={(event) => {
@@ -604,14 +606,20 @@ export function ArchiveCenterScreen({ route, navigation }: Props) {
   };
 
   const openCreateProfile = () => {
-    const nextIndex = profiles.length + 1;
-    showEditModal({
-      id: `profile-${Date.now()}`,
-      name: `${t('archive.defaultName')}${nextIndex}`,
-      relation: '其他',
-      gender: '未填写',
-      birthday: '未填写',
-    }, 'create');
+    getEffectivePlanLimits().then(({ limits }) => {
+      if (limits.profileLimit !== undefined && profiles.length >= limits.profileLimit) {
+        Alert.alert(t('member.title'), t('archive.profileLimitReached'));
+        return;
+      }
+      const nextIndex = profiles.length + 1;
+      showEditModal({
+        id: `profile-${Date.now()}`,
+        name: `${t('archive.defaultName')}${nextIndex}`,
+        relation: '其他',
+        gender: '未填写',
+        birthday: '未填写',
+      }, 'create');
+    });
   };
 
   const selectedMonth = calendarMode === 'solar' ? solarMonth : lunarMonth;
@@ -710,11 +718,21 @@ export function ArchiveCenterScreen({ route, navigation }: Props) {
       birthday: editingProfile.birthday.trim() || '未填写',
     };
     if (editingMode === 'create') {
-      const createdProfile = await createProfile(normalizedProfile);
-      const nextProfiles = [...profiles, createdProfile];
-      setProfiles(nextProfiles);
-      await setSelectedProfileId(createdProfile.id);
-      setExpandedId(createdProfile.id);
+      try {
+        const createdProfile = await createProfile(normalizedProfile);
+        const nextProfiles = [...profiles, createdProfile];
+        setProfiles(nextProfiles);
+        await setSelectedProfileId(createdProfile.id);
+        setExpandedId(createdProfile.id);
+      } catch (error) {
+        const message = error instanceof ApiRequestError && error.detail?.code === 'profile_limit_exceeded'
+          ? t('archive.profileLimitReached')
+          : error instanceof Error && error.message.includes('profile_limit_exceeded')
+            ? t('archive.profileLimitReached')
+            : t('login.genericFailed');
+        Alert.alert(t('member.title'), message);
+        return;
+      }
     } else {
       const updatedProfile = await updateProfile(normalizedProfile);
       setProfiles((current) => current.map((profile) => (profile.id === normalizedProfile.id ? updatedProfile : profile)));
@@ -781,11 +799,11 @@ export function ArchiveCenterScreen({ route, navigation }: Props) {
     <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
       <View style={styles.edgeBackGestureArea} {...edgeBackPanResponder.panHandlers} />
       <View style={styles.topLayer} pointerEvents="box-none">
-        <Pressable style={[styles.backButton, { backgroundColor: colors.control }]} onPress={() => navigation.goBack()}>
-          <Text style={[styles.backButtonText, { color: colors.text }]}>‹</Text>
+        <Pressable style={[styles.backButton, { backgroundColor: '#fff' }]} onPress={() => navigation.goBack()}>
+          {Platform.OS === 'android' ? <LineIcon name="chevronLeft" size={25} color={colors.text} /> : <Text style={[styles.backButtonText, { color: colors.text }]}>‹</Text>}
         </Pressable>
         <Text pointerEvents="none" style={[styles.navTitle, { color: colors.text }]}>{t('archive.title')}</Text>
-        <AppMoreMenu navigation={navigation} />
+        <AppMoreMenu navigation={navigation} buttonBackgroundColor="#fff" />
       </View>
 
       <ScrollView style={styles.scroll} showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
@@ -1047,9 +1065,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     zIndex: 42,
-    elevation: 42,
+    elevation: 4,
   },
-  backButtonText: { color: '#111', fontSize: 34, fontWeight: '500', lineHeight: 38, marginTop: -2 },
+  backButtonText: { color: '#111', fontSize: 34, fontWeight: '500', lineHeight: 38, marginTop: -2, ...Platform.select({ android: { lineHeight: 40, marginTop: 0, includeFontPadding: false, textAlignVertical: 'center' } }) },
   navTitle: { position: 'absolute', top: 69, left: 88, right: 88, color: '#111', fontSize: 17, fontWeight: '900', textAlign: 'center' },
   scroll: { position: 'absolute', left: 0, right: 0, top: 104, bottom: 0 },
   content: { paddingTop: 8, paddingHorizontal: 18, paddingBottom: 116 },
@@ -1057,8 +1075,8 @@ const styles = StyleSheet.create({
   groupHeader: { height: 26, flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 4, marginTop: 2 },
   groupTitle: { color: '#666', fontSize: 12, fontWeight: '900' },
   groupDivider: { flex: 1, height: 1, backgroundColor: '#dddddd' },
-  archiveCardShell: { overflow: 'hidden' },
-  archiveCard: { ...CARD_SHADOW, borderRadius: 20, backgroundColor: '#fff', overflow: 'hidden' },
+  archiveCardShell: { ...CARD_SHADOW, borderRadius: 20, backgroundColor: '#fff', overflow: 'hidden', ...Platform.select({ android: { elevation: 0, shadowOpacity: 0, borderWidth: 1, borderColor: 'rgba(0,0,0,0.04)' } }) },
+  archiveCard: { borderRadius: 20, backgroundColor: '#fff', overflow: 'hidden' },
   archiveHeader: { minHeight: 78, flexDirection: 'row', alignItems: 'center', gap: 13, paddingHorizontal: 15 },
   avatar: { backgroundColor: '#111', alignItems: 'center', justifyContent: 'center' },
   avatarImage: { backgroundColor: '#111' },

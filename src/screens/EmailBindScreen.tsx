@@ -1,7 +1,8 @@
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { useEffect, useRef, useState } from 'react';
-import { Alert, Animated, Easing, Keyboard, PanResponder, Pressable, SafeAreaView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Alert, Animated, Easing, Keyboard, PanResponder, Platform, Pressable, SafeAreaView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { bindAccount, sendBindCode } from '../api/client';
+import { LineIcon } from '../components/LineIcon';
 import { RootStackParamList } from '../navigation/types';
 import { useAppTheme } from '../theme/AppTheme';
 import { useAppLanguage } from '../i18n/AppLanguage';
@@ -198,7 +199,7 @@ export function EmailBindScreen({ navigation }: Props) {
       <View style={styles.edgeBackGestureArea} {...edgeBackPanResponder.panHandlers} />
       <View style={styles.topLayer} pointerEvents="box-none">
         <Pressable style={[styles.backButton, { backgroundColor: colors.control }]} onPress={() => navigation.goBack()}>
-          <Text style={[styles.backButtonText, { color: colors.text }]}>‹</Text>
+          {Platform.OS === 'android' ? <LineIcon name="chevronLeft" size={25} color={colors.text} /> : <Text style={[styles.backButtonText, { color: colors.text }]}>‹</Text>}
         </Pressable>
       </View>
 
@@ -269,9 +270,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     zIndex: 42,
-    elevation: 42,
+    elevation: 4,
   },
-  backButtonText: { color: '#111', fontSize: 34, fontWeight: '500', lineHeight: 38, marginTop: -2 },
+  backButtonText: { color: '#111', fontSize: 34, fontWeight: '500', lineHeight: 38, marginTop: -2, ...Platform.select({ android: { lineHeight: 40, marginTop: 0, includeFontPadding: false, textAlignVertical: 'center' } }) },
   content: { flex: 1, paddingTop: 168, paddingHorizontal: 24, alignItems: 'stretch' },
   title: { color: '#000', fontSize: 30, fontWeight: '900', textAlign: 'left' },
   subtitle: { color: '#777', fontSize: 13, fontWeight: '800', marginTop: 8, textAlign: 'left' },
